@@ -137,7 +137,7 @@ jobs:
           git add results/
           git diff --quiet --cached || git commit -m "bench: results for $(date -u +%Y-%m-%d)"
           git push
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: site
-      - uses: actions/deploy-pages@v4
+      - uses: actions/deploy-pages@v5
