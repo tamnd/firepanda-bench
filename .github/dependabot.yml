@@ -1,0 +1,17 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+    labels: ["ci", "dependencies"]
+    commit-message:
+      prefix: "ci"
+
+# Engine versions are deliberately NOT managed by Dependabot. Upgrading pandas or
+# Polars changes what every published number means, so it is a decision that comes
+# with a re-run of the affected suites, not an automatic pull request. The upgrade
+# path is: edit the pin in pixi.toml, re-run the suite, publish both numbers.

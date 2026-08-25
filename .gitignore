@@ -1,0 +1,16 @@
+.pixi/
+data/
+datasets/
+*.csv
+*.parquet
+*.tbl
+site/
+env.json
+__pycache__/
+.venv/
+.ruff_cache/
+.pytest_cache/
+.DS_Store
+
+# Result files are committed deliberately; scratch runs are not.
+results/scratch-*.json

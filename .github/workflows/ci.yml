@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  harness:
+    name: Harness checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Lint
+        run: |
+          [ -d tools ] || { echo "::notice::no harness yet"; exit 0; }
+          uvx ruff check . && uvx ruff format --check .
+
+      - name: Tests
+        run: |
+          [ -d tests ] || { echo "::notice::no tests yet"; exit 0; }
+          uvx --with pytest pytest -q
+
+      # Every result file must name every engine version and the Mojo toolchain that
+      # compiled firepanda. A result that cannot say what produced it is not a result.
+      - name: Results are self-describing
+        run: python3 tools/validate_results.py results/
+
+      # The suite is only credible if it reports losses. This is a crude check and it
+      # is better than nothing: a published comparison in which firepanda wins every
+      # single row should be looked at by a human before it goes out.
+      - name: Flag suspiciously clean sweeps
+        run: |
+          [ -f tools/check_sweep.py ] || { echo "::notice::sweep check not implemented yet"; exit 0; }
+          for f in results/*.json; do
+            [ -e "$f" ] || continue
+            python3 tools/check_sweep.py "$f" || true
+          done
+        continue-on-error: true
+
+  links:
+    name: Link check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: lycheeverse/lychee-action@v2
+        with:
+          args: --no-progress --max-concurrency 4 './**/*.md'
+          fail: true
