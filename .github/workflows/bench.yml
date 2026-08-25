@@ -1,0 +1,143 @@
+name: Benchmarks
+
+on:
+  # The library changes when someone writes code; the benchmarks need to re-run when
+  # any of five other projects release, and on a schedule regardless.
+  schedule:
+    - cron: "0 3 * * 0"
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Suite to run
+        type: choice
+        options: [db-benchmark, tpch, ingestion, udf, all]
+        default: all
+      size:
+        description: Dataset size
+        type: choice
+        options: ["0.5GB", "5GB", "50GB", "SF1", "SF10"]
+        default: "0.5GB"
+      engines:
+        description: Comma-separated engine list, or "all"
+        type: string
+        default: all
+      ref:
+        description: firepanda ref to benchmark
+        type: string
+        default: main
+  repository_dispatch:
+    types: [firepanda-release, upstream-release]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    name: Detect harness
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.d.outputs.ready }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: d
+        run: |
+          if [ -f tools/run.py ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Harness not implemented::firepanda is at specification stage; there is nothing to benchmark yet."
+          fi
+
+  run:
+    name: ${{ matrix.suite }} @ ${{ inputs.size || '0.5GB' }}
+    needs: guard
+    if: needs.guard.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: ${{ (inputs.suite == 'all' || inputs.suite == '') && fromJSON('["db-benchmark","tpch","ingestion","udf"]') || fromJSON(format('["{0}"]', inputs.suite)) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-pixi
+
+      # Pinned versions for every engine, recorded in the result file. A comparison
+      # against an unnamed version of anything is not a comparison.
+      - name: Record environment
+        run: pixi run env-report --output env.json
+
+      - name: Fetch or generate datasets
+        run: pixi run data --suite ${{ matrix.suite }} --size ${{ inputs.size || '0.5GB' }}
+
+      - name: Run
+        env:
+          FIREPANDA_REF: ${{ inputs.ref || 'main' }}
+        run: |
+          pixi run bench \
+            --suite ${{ matrix.suite }} \
+            --size ${{ inputs.size || '0.5GB' }} \
+            --engines "${{ inputs.engines || 'all' }}" \
+            --runs 10 \
+            --env env.json \
+            --output "results/$(date -u +%Y-%m-%d)-${{ matrix.suite }}.json"
+
+      - name: Summary
+        run: pixi run report --latest --format markdown >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: results-${{ matrix.suite }}-${{ github.run_id }}
+          path: results/*.json
+          retention-days: 90
+
+  # GPU comparison against cuDF, from M9. Runs only where a self-hosted accelerator
+  # runner is configured; skipping is reported rather than passing silently.
+  gpu:
+    name: GPU (vs cuDF)
+    needs: guard
+    if: needs.guard.outputs.ready == 'true' && vars.GPU_RUNNER != ''
+    runs-on: ${{ vars.GPU_RUNNER }}
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-pixi
+        with:
+          environment: gpu
+      - run: pixi run --environment gpu bench --suite db-benchmark --engines firepanda-gpu,cudf --runs 10
+
+  publish:
+    name: Commit results and publish site
+    needs: run
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: results-*
+          merge-multiple: true
+          path: results
+      - uses: ./.github/actions/setup-pixi
+      - name: Build site
+        run: pixi run site --input results --output site
+      - name: Commit result history
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add results/
+          git diff --quiet --cached || git commit -m "bench: results for $(date -u +%Y-%m-%d)"
+          git push
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - uses: actions/deploy-pages@v4
