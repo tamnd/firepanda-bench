@@ -24,7 +24,7 @@ runs:
         echo "$HOME/.pixi/bin" >> "$GITHUB_PATH"
 
     - name: Cache environment
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: |
           .pixi

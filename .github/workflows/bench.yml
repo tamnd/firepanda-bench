@@ -42,7 +42,7 @@ jobs:
     outputs:
       ready: ${{ steps.d.outputs.ready }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: d
         run: |
           if [ -f tools/run.py ]; then
@@ -63,7 +63,7 @@ jobs:
       matrix:
         suite: ${{ (inputs.suite == 'all' || inputs.suite == '') && fromJSON('["db-benchmark","tpch","ingestion","udf"]') || fromJSON(format('["{0}"]', inputs.suite)) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/setup-pixi
 
@@ -90,7 +90,7 @@ jobs:
       - name: Summary
         run: pixi run report --latest --format markdown >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: results-${{ matrix.suite }}-${{ github.run_id }}
           path: results/*.json
@@ -105,7 +105,7 @@ jobs:
     runs-on: ${{ vars.GPU_RUNNER }}
     timeout-minutes: 240
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-pixi
         with:
           environment: gpu
@@ -121,8 +121,8 @@ jobs:
       pages: write
       id-token: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           pattern: results-*
           merge-multiple: true
