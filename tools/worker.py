@@ -32,31 +32,66 @@ import queries
 
 import engines
 
+# Which file format each suite's engines are handed. Everything but ingestion is
+# compared on Parquet, and ingestion is the suite that measures the CSV reader.
+SUITE_FORMAT = {"ingestion": "csv"}
 
-def table_paths(manifest: dict, root: Path, needed: tuple[str, ...]) -> dict[str, str]:
+
+def table_paths(
+    manifest: dict, root: Path, needed: tuple[str, ...], fmt: str = "parquet"
+) -> dict[str, str]:
     """Resolves the file each table the query reads lives in.
 
     Args:
         manifest: The parsed dataset manifest.
         root: The directory the manifest sits in.
         needed: The table names the query reads.
+        fmt: Which of the written formats to hand over.
 
     Returns:
         A mapping from table name to path.
 
     Raises:
-        FileNotFoundError: If the dataset has no Parquet for a needed table.
+        FileNotFoundError: If the dataset has no file of that format for a needed
+            table.
     """
     paths = {}
     for table in needed:
         entry = manifest["files"].get(table)
-        if entry is None or "parquet" not in entry:
-            raise FileNotFoundError(f"the dataset has no parquet for '{table}'")
+        if entry is None or fmt not in entry:
+            raise FileNotFoundError(f"the dataset has no {fmt} for '{table}'")
         # The manifest records an absolute path from the machine that generated
         # the data. Resolving against the manifest's own directory instead means a
         # dataset copied to another machine still works.
-        paths[table] = str(root / f"{table}.parquet")
+        paths[table] = str(root / f"{table}.{fmt}")
     return paths
+
+
+def cold_note(dropped: bool) -> str:
+    """Says what the cold run of an ingestion query was actually measuring.
+
+    A cold number that was taken against a file still sitting in the page cache
+    is a warm number with a misleading name, so which of the two happened is
+    recorded next to the result rather than assumed.
+
+    A note only when the eviction failed, because a note every measurement in the
+    suite carries is not a note, it is a paragraph in the wrong place, and it
+    crowds out the one that is about a single engine. That the eviction worked is
+    already visible in the sample: `block_reads` on the cold run comes to the size
+    of the file.
+
+    Args:
+        dropped: What `evict_page_cache` reported.
+
+    Returns:
+        A note for the measurement, empty if there is nothing surprising to say.
+    """
+    if dropped:
+        return ""
+    return (
+        "the page cache could not be dropped on this machine, so the cold run is "
+        "warm and only the warm numbers mean anything"
+    )
 
 
 def run_external(
@@ -67,6 +102,7 @@ def run_external(
     suite: str,
     runs: int,
     timeout_s: int,
+    paths: dict[str, str],
 ) -> metrics.Measurement:
     """Measures an engine that is not a Python library, by running it.
 
@@ -89,6 +125,8 @@ def run_external(
         suite: The suite name.
         runs: How many timed runs.
         timeout_s: How long to wait for the child.
+        paths: The file each table the query reads lives in, empty for a suite
+            whose data the child generates for itself.
 
     Returns:
         The measurement.
@@ -100,6 +138,7 @@ def run_external(
         runs=runs,
         suite=suite,
         timeout_s=timeout_s,
+        paths=paths,
     )
     if not result.get("ok"):
         measurement.note = result.get("note", "the engine reported a failure")
@@ -190,10 +229,26 @@ def run(
         return measurement
 
     manifest = json.loads(manifest_path.read_text())
+    fmt = SUITE_FORMAT.get(suite, "parquet")
+
+    try:
+        paths = table_paths(manifest, manifest_path.resolve().parent, query.needs, fmt)
+    except FileNotFoundError as exc:
+        measurement.note = str(exc)
+        return measurement
 
     if getattr(module, "EXTERNAL", False):
         try:
-            return run_external(module, engine_name, query_name, manifest, suite, runs, timeout_s)
+            # The child does all of its runs itself, so the eviction that makes
+            # the first one cold has to happen here, before it starts.
+            if suite == "ingestion":
+                measurement.note = cold_note(metrics.evict_page_cache(list(paths.values())))
+            external = run_external(
+                module, engine_name, query_name, manifest, suite, runs, timeout_s, paths
+            )
+            if external.ok and measurement.note:
+                external.note = measurement.note
+            return external
         except Exception:
             measurement.note = traceback.format_exc(limit=4).strip().replace("\n", " | ")
             return measurement
@@ -204,28 +259,43 @@ def run(
         return measurement
 
     try:
-        paths = table_paths(manifest, manifest_path.resolve().parent, query.needs)
-    except FileNotFoundError as exc:
-        measurement.note = str(exc)
-        return measurement
-
-    try:
         started = time.perf_counter()
         # An engine that prints on load must not print onto the result line.
         with contextlib.redirect_stdout(sys.stderr):
             context = module.load(paths, suite=suite, io=io)
         measurement.load_s = time.perf_counter() - started
 
+        # For the ingestion suite `load` has read nothing, the timed function is
+        # the read itself, and the first run is made cold on purpose.
+        before_cold = None
+        if suite == "ingestion":
+            targets = list(paths.values())
+
+            def evict() -> None:
+                measurement.note = cold_note(metrics.evict_page_cache(targets))
+
+            before_cold = evict
+
         with contextlib.redirect_stdout(sys.stderr):
-            samples, answer = metrics.measure(lambda: runner(context), runs)
+            samples, answer = metrics.measure(
+                lambda: runner(context), runs, before_cold=before_cold
+            )
         measurement.samples = samples
 
-        rows, cols, checksum, sums, hashes = engines.digest(answer)
+        reduce = engines.read_digest if suite == "ingestion" else engines.digest
+        rows, cols, checksum, sums, hashes = reduce(answer)
         measurement.rows_out = rows
         measurement.cols_out = cols
         measurement.checksum = checksum
         measurement.sums = sums
         measurement.hashes = hashes
+        # An engine that had to reconfigure itself to read a file at all says so
+        # through its context, and that has to reach the result: a number taken
+        # with different options is not the same number, and the reader of the
+        # table has no other way to know.
+        aside = context.get("note") if isinstance(context, dict) else None
+        if aside:
+            measurement.note = f"{measurement.note}; {aside}" if measurement.note else aside
         measurement.ok = True
     except NotImplementedError as exc:
         measurement.note = str(exc) or f"{engine_name} cannot run {query_name} yet"

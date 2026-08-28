@@ -26,8 +26,17 @@ speed. The query text is not written here: it is read out of DuckDB's `tpch`
 extension, which carries the official statements, so what the SQL engine runs is
 the specification rather than someone's transcription of it.
 
-Query names collide between the suites, since both call their first query q1, so
-nothing here is looked up by bare name. The registry is keyed by suite.
+Ingestion is the third suite and the smallest, and it is the only one where the
+thing being measured is not a query at all. Every entry in it reads one CSV file
+and materializes it, because `read_csv` is the first line of code almost every
+user writes and a library that is quick at group by and slow to open a file gets
+judged on the second thing. The five files are different shapes rather than five
+sizes of one shape: narrow, narrow with the types declared instead of inferred,
+wide, quoted, and nine tenths empty.
+
+Query names collide between the suites, since both db-benchmark and TPC-H call
+their first query q1, so nothing here is looked up by bare name. The registry is
+keyed by suite.
 """
 
 from __future__ import annotations
@@ -43,7 +52,7 @@ class Query:
     """The identifier used in result files and tables."""
 
     group: str
-    """Which suite group it belongs to: groupby or join."""
+    """Which suite group it belongs to: groupby, join, tpch or csv."""
 
     description: str
     """What it computes, in words."""
@@ -52,7 +61,7 @@ class Query:
     """What it is here to expose."""
 
     keys: tuple[str, ...]
-    """The grouping or join key columns, for reference."""
+    """The grouping or join key columns, for reference. Empty for a read."""
 
     needs: tuple[str, ...]
     """Which generated tables it reads."""
@@ -404,18 +413,98 @@ TPCH = (
 
 DB_BENCHMARK = GROUPBY + JOIN
 
+
+def _csv(name: str, table: str, description: str, why: str) -> Query:
+    """Builds one ingestion entry.
+
+    Args:
+        name: The query name.
+        table: Which generated file it reads.
+        description: What it does, in words.
+        why: What it is here to expose.
+
+    Returns:
+        The query.
+    """
+    return Query(name, "csv", description, why, (), (table,), "ingestion")
+
+
+INGESTION = (
+    _csv(
+        "csv_narrow",
+        "narrow",
+        "read a four column CSV, types inferred",
+        "The floor, and the line of code that makes the first impression. Two "
+        "integers, a float and a short string, with the types worked out from the "
+        "file rather than declared, which is what a user who has just been handed "
+        "a file actually writes.",
+    ),
+    _csv(
+        "csv_narrow_typed",
+        "narrow",
+        "read the same four column CSV, types declared",
+        "The same bytes with inference switched off. The gap between this and "
+        "csv_narrow is what inference costs and nothing else, which is worth "
+        "separating because in most readers it is a whole extra pass over the file "
+        "and in some it is nearly free.",
+    ),
+    _csv(
+        "csv_wide",
+        "wide",
+        "read a fifty column CSV, types inferred",
+        "Per field cost rather than per byte cost. The file is about the size of "
+        "the narrow one and has twelve times as many fields in it, so a reader "
+        "that decides what to do once per field instead of once per column pays "
+        "here and nowhere else in the suite.",
+    ),
+    _csv(
+        "csv_quoted",
+        "quoted",
+        "read a CSV whose text fields carry delimiters, newlines and quotes",
+        "The case that stops a reader from splitting the file on newlines and "
+        "going home. Every note in the file contains a comma, an embedded line "
+        "feed and a pair of quotes, so a reader that gets the quoting wrong "
+        "returns a different number of rows and the agreement check catches it "
+        "rather than the timing flattering it.",
+    ),
+    _csv(
+        "csv_nulls",
+        "nulls",
+        "read a CSV that is nine tenths empty fields",
+        "Null handling, which is where a reader that allocates or branches per "
+        "value shows it. Every sparse column is numeric on purpose: engines "
+        "disagree about whether an empty text field is a null or an empty string, "
+        "both answers are defensible, and a file that asked the question would "
+        "report a difference in semantics as a difference in the answer.",
+    ),
+)
+
+# The types `csv_narrow_typed` declares, in the file's column order and in nobody's
+# type system. Every engine maps this to its own names, and it lives here rather
+# than in four engine modules so that "declared" means the same thing in each of
+# them: an engine that quietly declared a narrower integer would be reading a
+# different file from everyone else.
+NARROW_SCHEMA = (
+    ("id", "int64"),
+    ("pair", "int64"),
+    ("score", "float64"),
+    ("label", "string"),
+)
+
 # Every suite the harness knows how to run, and the queries in each. The names
 # collide across suites on purpose, because renaming TPC-H's q1 would make the
 # result file harder to check against a published one.
 SUITES = {
     "db-benchmark": DB_BENCHMARK,
     "tpch": TPCH,
+    "ingestion": INGESTION,
 }
 
 # The groups a `--queries` argument may name, per suite.
 GROUPS = {
     "db-benchmark": ("groupby", "join"),
     "tpch": ("tpch",),
+    "ingestion": ("csv",),
 }
 
 

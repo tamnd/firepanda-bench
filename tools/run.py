@@ -12,6 +12,7 @@ normalized cross machine comparison is a model rather than a measurement.
 
 Usage:
     python tools/run.py --suite db-benchmark --size 0.5GB --engines all --runs 10
+    python tools/run.py --suite ingestion --size 10M --engines all --runs 7
 """
 
 from __future__ import annotations
@@ -41,9 +42,15 @@ DATA_ROOT = ROOT / "data"
 # not hold a scheduled run open all weekend.
 DEFAULT_TIMEOUT_S = 3600
 
-# The size to run when none is named. Both are the smallest of their suite, which
-# is the one that fits on a laptop and finishes over a coffee.
-DEFAULT_SIZE = {"db-benchmark": "0.5GB", "tpch": "sf1"}
+# The size to run when none is named. Each is the smallest of its suite that is
+# worth publishing, which is the one that fits on a laptop and finishes over a
+# coffee.
+DEFAULT_SIZE = {"db-benchmark": "0.5GB", "tpch": "sf1", "ingestion": "10M"}
+
+# The io mode a suite runs in when none is named. Ingestion is scan and cannot be
+# anything else: its timed function is the read, and a memory mode for it would
+# mean reading the file before timing the read.
+DEFAULT_IO = {"ingestion": "scan"}
 
 
 def engine_versions(names: list[str]) -> dict[str, str]:
@@ -269,10 +276,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--queries", default="all")
     parser.add_argument(
         "--io",
-        default="memory",
-        choices=engine_registry.IO_MODES,
+        default="",
+        choices=("", *engine_registry.IO_MODES),
         help="memory gives every engine the same in memory tables; scan lets an "
-        "engine that can push a projection into the file do it",
+        "engine that can push a projection into the file do it. Defaults to "
+        "memory, and to scan for the ingestion suite, which has no other mode",
     )
     parser.add_argument("--runs", type=int, default=10)
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_S)
@@ -285,6 +293,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     size = args.size or DEFAULT_SIZE[args.suite]
+    io = args.io or DEFAULT_IO.get(args.suite, "memory")
+    if args.suite == "ingestion" and io != "scan":
+        raise SystemExit(
+            "the ingestion suite runs in scan mode only. The reader is the thing "
+            "being measured, and memory mode would read the file before timing "
+            "the read."
+        )
     names = (
         list(engine_registry.KNOWN)
         if args.engines in ("all", "")
@@ -301,7 +316,7 @@ def main(argv: list[str] | None = None) -> int:
     environment = describe_environment(args.env)
 
     print(
-        f"{args.suite} at {size}, io {args.io}: {len(selected)} queries "
+        f"{args.suite} at {size}, io {io}: {len(selected)} queries "
         f"x {len(names)} engines x {args.runs} runs"
     )
 
@@ -309,10 +324,10 @@ def main(argv: list[str] | None = None) -> int:
     started = time.perf_counter()
     for query in selected:
         for engine in names:
-            label = f"  {query.name:<4} {engine:<10}"
+            label = f"  {query.name:<17} {engine:<10}"
             print(label, end="", flush=True)
             measurement = measure_one(
-                engine, query.name, manifest, args.suite, args.io, args.runs, args.timeout
+                engine, query.name, manifest, args.suite, io, args.runs, args.timeout
             )
             measurements.append(measurement)
             if measurement.ok:
@@ -333,7 +348,7 @@ def main(argv: list[str] | None = None) -> int:
         # Which engines were handed a file and which were handed memory. A reader
         # comparing two result files has to know this, because a scan run and a
         # memory run of the same query are not the same measurement.
-        "io": args.io,
+        "io": io,
         "engines": engine_versions(names),
         "mojo_version": environment.get("mojo_version", ""),
         "firepanda_ref": environment.get("firepanda_ref", ""),
@@ -372,7 +387,7 @@ def main(argv: list[str] | None = None) -> int:
         / "results"
         / (
             f"{time.strftime('%Y-%m-%d')}-{machine_slug(document['machine'])}-"
-            f"{args.suite}-{size}-{args.io}.json"
+            f"{args.suite}-{size}-{io}.json"
         )
     )
     out.parent.mkdir(parents=True, exist_ok=True)

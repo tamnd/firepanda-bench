@@ -29,17 +29,21 @@ The process prints one line of JSON on stdout. Anything else goes to stderr.
 
 Usage:
     firepanda-driver --query=q4 --rows=10000000 --runs=10
+    firepanda-driver --suite=ingestion --query=csv_narrow --path=narrow.csv --runs=7
 """
 
+from std.collections.span import Span
 from std.sys import argv
 from std.time import perf_counter_ns
 
 from firepanda.array.any import AnyArray
 from firepanda.array.array import Array
 from firepanda.array.strings import StringArray, StringBuilder
+from firepanda.dtype import Field, LogicalType, Schema
 from firepanda.frame.frame import DataFrame
 from firepanda.frame.groupby import AggSpec
 from firepanda.frame.series import Series
+from firepanda.io import ReadOptions, read_csv, read_csv_bytes_as
 from firepanda.join import JoinKind
 from firepanda.kernel import AggKind, subtract
 
@@ -500,6 +504,74 @@ def reduce_join(var joined: DataFrame) raises -> DataFrame:
     return out.with_column(Series("rows", counts^)).drop(keys("all"))
 
 
+def narrow_schema() raises -> Schema:
+    """Returns the types `csv_narrow_typed` declares.
+
+    These are `queries.NARROW_SCHEMA` in the harness, written out again here
+    because a Mojo binary cannot read a Python tuple. An engine that declared a
+    narrower integer than the others would be reading a different file from them,
+    so the two lists have to say the same thing.
+
+    Returns:
+        The schema, in the file's column order.
+    """
+    var fields = List[Field]()
+    fields.append(Field("id", LogicalType.INT64))
+    fields.append(Field("pair", LogicalType.INT64))
+    fields.append(Field("score", LogicalType.FLOAT64))
+    fields.append(Field("label", LogicalType.STRING))
+    return Schema(fields^)
+
+
+def read_one(query: String, path: String) raises -> DataFrame:
+    """Reads one CSV file, which is the whole of an ingestion measurement.
+
+    Args:
+        query: Which ingestion query, since one of them declares the types.
+        path: The file.
+
+    Returns:
+        The frame that was read.
+
+    Raises:
+        Error: If the file cannot be read, or is not readable as CSV.
+    """
+    var options = ReadOptions()
+    if query != "csv_narrow_typed":
+        return read_csv(path, options)
+
+    # There is no `read_csv(path, schema, options)` overload yet, so the file is
+    # opened here. This is what `read_csv` does with the bytes anyway, so the two
+    # measurements still cover the same work.
+    var handle = open(path, "r")
+    var data = handle.read_bytes()
+    handle.close()
+    return read_csv_bytes_as(Span(data), narrow_schema(), options)
+
+
+def column_bytes(ref column: AnyArray) raises -> Float64:
+    """Totals the byte lengths of a text column's values, skipping nulls.
+
+    The ingestion suite does not hash its text, because an answer there has as
+    many rows as the file has and the harness computes its side of that in Python.
+    Byte length and null count are what it compares instead, and this is the first
+    of the two.
+
+    Args:
+        column: The column, which must be a text column.
+
+    Returns:
+        The total, as a float, because that is the field the harness reads it
+        into.
+    """
+    var total = Float64(0)
+    ref text = column.strings()
+    for i in range(len(text)):
+        if text.is_valid(i):
+            total += Float64(text.byte_length(i))
+    return total
+
+
 def column_sum(ref column: AnyArray) raises -> Float64:
     """Sums a column as a float, skipping nulls.
 
@@ -745,13 +817,21 @@ def main() raises:
     var query = flag("query", "q4")
     var rows = Int(flag("rows", "1000000"))
     var runs = Int(flag("runs", "10"))
+    var suite = flag("suite", "db-benchmark")
+    var path = flag("path", "")
+    var reading = suite == "ingestion"
 
     var before = read_process_facts()
 
     var load_start = perf_counter_ns()
     var tables: Tables
     try:
-        tables = load(query, rows)
+        # An ingestion query loads nothing before it is timed. Opening the file
+        # is the measurement, so anything done here would be work taken out of
+        # the number.
+        tables = Tables(
+            DataFrame(), DataFrame(), DataFrame()
+        ) if reading else load(query, rows)
     except error:
         print(
             String(
@@ -771,9 +851,18 @@ def main() raises:
     var run_rss = List[Int]()
     var run_peaks = List[Int]()
     var answer = DataFrame()
+    var failure = String()
     for _ in range(runs):
         var started = perf_counter_ns()
-        answer = run_query(query, tables)
+        # A read can fail on the file rather than on the code, which a generated
+        # query cannot, so the run is reported as a failure with its reason
+        # instead of leaving the harness to explain a driver that printed
+        # nothing.
+        try:
+            answer = read_one(query, path) if reading else run_query(query, tables)
+        except error:
+            failure = String(error)
+            break
         timings.append(perf_counter_ns() - started)
         # Read once per run rather than on a sampling thread. A thread that woke
         # every few milliseconds would show up in this process's own CPU and
@@ -781,6 +870,18 @@ def main() raises:
         var each = read_process_facts()
         run_rss.append(each.rss_bytes)
         run_peaks.append(each.peak_rss_bytes)
+
+    if failure:
+        print(
+            String(
+                '{"ok": false, "query": ',
+                json_string(query),
+                ', "note": ',
+                json_string(failure),
+                "}",
+            )
+        )
+        return
 
     var cpu_after = read_cpu_ticks()
     var after = read_process_facts()
@@ -795,7 +896,32 @@ def main() raises:
     var summed = 0
     var hashed = 0
     for i in range(len(names)):
-        if answer[i].is_string():
+        if reading:
+            # An ingestion answer is the whole file, so it is reduced the way
+            # `read_digest` in the harness reduces it: a null count for every
+            # column, and a byte total for a text column where a numeric one
+            # gets a sum. Nothing is hashed, because the harness would have to
+            # hash ten million values in Python to compare it.
+            if summed > 0:
+                sums += ", "
+            sums += String(
+                json_string(String(names[i], ".nulls")),
+                ": ",
+                Float64(answer[i].null_count()),
+                ", ",
+            )
+            if answer[i].is_string():
+                sums += String(
+                    json_string(String(names[i], ".bytes")),
+                    ": ",
+                    column_bytes(answer[i]),
+                )
+            else:
+                sums += String(
+                    json_string(String(names[i], ".sum")), ": ", column_sum(answer[i])
+                )
+            summed += 1
+        elif answer[i].is_string():
             if hashed > 0:
                 hashes += ", "
             hashes += String(json_string(names[i]), ": ", column_hash(answer[i]))

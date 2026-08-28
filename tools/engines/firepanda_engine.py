@@ -10,12 +10,16 @@ is built from.
 There is a fairness problem here and it is worth stating plainly rather than
 burying it in a footnote.
 
-firepanda cannot read a Parquet file yet. It has a CSV field scanner and field
-parsers and no reader on top of them, and it has no Parquet at all. So it cannot
-be handed the file the other three engines are handed. What the driver does
-instead is generate the same data, using the same splitmix64 stream in the same
-counter form as `tools/data.py`, and the fingerprint check is what makes that
-claim testable rather than asserted.
+firepanda has no Parquet reader. It has a CSV reader, and Parquet is what the
+other three engines are handed for db-benchmark and TPC-H, so for those two suites
+it cannot be handed the same file. What the driver does instead is generate the
+same data, using the same splitmix64 stream in the same counter form as
+`tools/data.py`, and the fingerprint check is what makes that claim testable
+rather than asserted.
+
+The ingestion suite is the exception and it is the honest one. That suite's data
+is CSV, firepanda opens the same file as everybody else, and nothing about the
+comparison depends on two generators agreeing.
 
 That works for db-benchmark, whose data is generated. It does not work for TPC-H,
 whose data comes from dbgen, and no amount of cleverness makes it work: there is
@@ -74,6 +78,15 @@ UNSUPPORTED = {
     "q8": "needs a top-k per group, which is not a kernel that exists",
     "q9": "needs a correlation aggregate, which is not a kernel that exists",
 }
+
+# The ingestion suite, all of which the CSV reader handles.
+INGESTION_SUPPORTED = (
+    "csv_narrow",
+    "csv_narrow_typed",
+    "csv_wide",
+    "csv_quoted",
+    "csv_nulls",
+)
 
 
 def firepanda_home() -> Path:
@@ -195,7 +208,14 @@ def build(force: bool = False) -> Path:
     return binary
 
 
-def measure(query: str, rows: int, runs: int, suite: str, timeout_s: int) -> dict:
+def measure(
+    query: str,
+    rows: int,
+    runs: int,
+    suite: str,
+    timeout_s: int,
+    paths: dict[str, str] | None = None,
+) -> dict:
     """Runs one query in a child process and returns what it measured.
 
     Args:
@@ -204,12 +224,19 @@ def measure(query: str, rows: int, runs: int, suite: str, timeout_s: int) -> dic
         runs: How many timed runs.
         suite: Which suite is being run.
         timeout_s: How long to wait for the child.
+        paths: The file each table lives in, used by the ingestion suite and
+            ignored by the two suites whose data the driver generates.
 
     Returns:
         A mapping with `ok` and, when true, the timings, memory and answer digest
         inputs. When false, `note` says why.
     """
-    if suite != "db-benchmark":
+    if suite == "ingestion":
+        if query not in INGESTION_SUPPORTED:
+            return {"ok": False, "note": f"firepanda does not implement {query}"}
+        if not paths:
+            return {"ok": False, "note": "the harness passed no file to read"}
+    elif suite != "db-benchmark":
         return {
             "ok": False,
             "note": (
@@ -218,7 +245,7 @@ def measure(query: str, rows: int, runs: int, suite: str, timeout_s: int) -> dic
                 "from a seed"
             ),
         }
-    if query not in SUPPORTED:
+    elif query not in SUPPORTED:
         return {
             "ok": False,
             "note": UNSUPPORTED.get(query, f"firepanda does not implement {query}"),
@@ -234,7 +261,11 @@ def measure(query: str, rows: int, runs: int, suite: str, timeout_s: int) -> dic
         f"--query={query}",
         f"--rows={rows}",
         f"--runs={runs}",
+        f"--suite={suite}",
     ]
+    if suite == "ingestion":
+        # One file per ingestion query, so there is exactly one path to pass.
+        command.append(f"--path={next(iter(paths.values()))}")
     try:
         completed = subprocess.run(
             command, capture_output=True, text=True, timeout=timeout_s, check=False

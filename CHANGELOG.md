@@ -4,6 +4,30 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### The ingestion suite runs
+
+`read_csv` is the first line of code almost every user writes, and until now the harness had nothing to say about it. It has five queries over four generated files: a four column file with types inferred, the same file with types declared, a fifty column file at a tenth of the rows so the bytes stay level and what moves is the per field cost, a file whose quoted text fields carry delimiters and line feeds and doubled quotes, and a file that is nine tenths empty fields.
+
+It is also the first suite where firepanda is handed the same file as everybody else. db-benchmark regenerates its data from the same seed because firepanda has no Parquet reader, and that regeneration is a claim the agreement check tests rather than a fact. Here there is nothing to regenerate. All four engines opened one file and agreed on all five queries, including the quoted one, which is a stronger statement about firepanda's CSV reader than any timing in the table.
+
+The suite runs in `scan` mode only and `run.py` refuses `--io memory` for it with the reason, because reading the file before timing the read is not a mode, it is a mistake.
+
+### The timed region is the read, and only the read
+
+Every other suite has its engines return an Arrow table, which is how the harness compares answers. Doing that here would have timed the conversion as part of the read, and the conversion is neither small nor the same size for everyone: on the fifty column file it cost Polars about seventy times what the read did, because Polars stores text as views into a buffer and Arrow wants it offset encoded. The first run of this suite reported Polars as the slowest CSV reader in the table when it is the fastest. Each engine now returns its own frame and the harness converts afterwards, outside the timing.
+
+### pandas cannot read the quoted file with the pyarrow engine
+
+pandas gets the pyarrow engine everywhere in this harness, because it is multithreaded, most people do not know it is there, and benchmarking against the slower configuration of a competitor is the kind of thing that gets noticed. On a file with a line feed inside a quoted field it fails outright with a parse error: pyarrow's reader has `newlines_in_values` off by default and pandas does not expose it. The harness falls back to the default C engine, which reads the file correctly and takes about sixty times longer, and records the fallback in a note the report prints beside the number. A measurement taken under a different configuration is still a measurement, but it is not the same one as its neighbours in the row.
+
+### Cold runs are actually cold
+
+The first run of every ingestion measurement is taken after the file has been dropped from the page cache with `posix_fadvise`, which needs no privilege and no separate command, and it is reported separately from the warm median. That the drop took is checked rather than asserted: the block reads recorded against the cold sample come to the size of the file, and on a machine where the kernel refuses, every measurement in the run carries a note saying the cold column is warm.
+
+### Reading a whole file needed a cheaper agreement check
+
+The existing text digest is a 64 bit FNV over every value computed in Python, which is right for a group by answer with as many rows as there are groups and wrong for an answer with as many rows as the file. Ingestion answers are compared on the row count, the null count of every column including the numeric ones, the sum of every numeric column and the total byte length of every text column. That is weaker and the weakness is worth naming: it does not catch two values swapped between rows. What it does catch is the class of mistake a CSV reader actually makes, which is losing a row, splitting a quoted field on the delimiter inside it, dropping the escape from a doubled quote, or reading an empty field as an empty string instead of a null.
+
 ## v0.2.0
 
 A minor bump, and the reason is the rule at the top of this file. Two changes here alter what a published number means. firepanda's peak resident memory on the group by queries was measured against a narrower table than the other three engines were given, and it now is not, so those numbers moved and a v0.1.0 memory figure is not comparable with a v0.2.0 one. And a result file now names the build that produced it, which every file before this one either failed to do or did wrongly.
