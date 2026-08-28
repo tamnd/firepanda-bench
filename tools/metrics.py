@@ -25,6 +25,7 @@ of the query. The worker measures itself, and the parent measures the worker.
 from __future__ import annotations
 
 import json
+import math
 import os
 import platform
 import resource
@@ -159,6 +160,8 @@ class Measurement:
         return {
             "median_s": statistics.median(warm_walls),
             "iqr_s": _iqr(warm_walls),
+            "p90_s": _percentile(warm_walls, 90),
+            "p99_s": _percentile(warm_walls, 99),
             "min_s": warm_walls[0],
             "max_s": warm_walls[-1],
             "cold_s": self.samples[0].wall_s,
@@ -197,6 +200,30 @@ def _iqr(values: list[float]) -> float:
         return values[-1] - values[0] if values else 0.0
     quantiles = statistics.quantiles(values, n=4, method="inclusive")
     return quantiles[2] - quantiles[0]
+
+
+def _percentile(values: list[float], rank: int) -> float:
+    """Returns a percentile of an already sorted list by nearest rank.
+
+    Ten runs cannot resolve a ninety ninth percentile and this does not pretend
+    otherwise: at ten samples `p99_s` is the slowest run, and it is reported under
+    that name anyway so a reader comparing engines has the tail in the same column
+    rather than having to reconstruct it from `all_runs_s`. The interpolating
+    definition would be worse here, because it would invent a value between two
+    runs and give the number an air of precision it has not got. Raising `--runs`
+    is what makes these two mean what they say.
+
+    Args:
+        values: The sorted samples.
+        rank: The percentile wanted, from 0 to 100.
+
+    Returns:
+        The sample at that rank.
+    """
+    if not values:
+        return 0.0
+    index = math.ceil(rank / 100 * len(values)) - 1
+    return values[max(0, min(index, len(values) - 1))]
 
 
 def _parallelism(samples: list[Sample]) -> float:

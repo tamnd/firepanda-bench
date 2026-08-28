@@ -18,7 +18,7 @@ A full run is eight result files: two suites, two io modes, and two machines, an
 
 A suite that only shows wins is not information, and anyone experienced reads it as an advertisement and discounts everything in it. Where pandas, Polars, DuckDB or cuDF is faster, the number goes in the table with a note about why, and if the reason is "not optimized yet" it says that rather than being omitted.
 
-The same applies to coverage. firepanda cannot run TPC-H at all right now, because it has no Parquet reader and no string ordering, so the TPC-H report has a firepanda column of twenty two explicit refusals rather than no firepanda column. An engine that is quietly absent from half a table looks like an engine that is fast on the other half.
+The same applies to coverage. firepanda cannot run TPC-H at all right now, because it has no Parquet reader and the suite's data comes from dbgen rather than from a seed, so the TPC-H report has a firepanda column of twenty two explicit refusals rather than no firepanda column. An engine that is quietly absent from half a table looks like an engine that is fast on the other half.
 
 ## What we are measured against
 
@@ -59,7 +59,7 @@ Three places where the comparison is not perfectly even, stated here rather than
 
 **pandas gets float64 money columns in TPC-H.** Arrow-backed pandas cannot do the decimal arithmetic that Q1 needs, because the intermediate wants precision 61 and Arrow's limit is 38, and there is no way to ask for a narrower one. So decimal columns are cast to double at load. That is faster than exact decimal arithmetic would be, so the bias runs in pandas' favour.
 
-**firepanda runs 8 of 15 db-benchmark queries and 0 of 22 TPC-H queries.** The rest need string ordering or a Parquet reader. The report lists each one with the reason.
+**firepanda runs 13 of 15 db-benchmark queries and 0 of 22 TPC-H queries.** The two it misses are q8, which needs a top-k per group, and q9, which needs a correlation. TPC-H needs a Parquet reader it does not have. The report lists each one with the reason.
 
 ## Two methodology notes that decide whether the numbers mean anything
 
