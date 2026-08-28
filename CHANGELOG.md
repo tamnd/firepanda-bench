@@ -4,6 +4,14 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### The timed region stops paying for the previous run's teardown
+
+Every timed run in the harness was shaped `answer = run()`, and the rebinding is what releases the answer the run before it produced. That release happens inside the timed region, so run two was charged for freeing run one's result, run three for run two's, and so on. On the ingestion suite, where an answer is a whole ten million row frame, that is gigabytes of free attributed to the wrong thing. The previous answer is dropped before the clock starts now, in `metrics.measure` for the three Python engines and in the firepanda driver's loop for the same reason.
+
+It was charged to all four engines equally, so no published comparison was ever tilted by it, but it was a constant added to every number, and a constant added to everything compresses the differences the suite exists to show. It also added most of the run to run spread: the interquartile range on `csv_narrow` fell from 80 ms to 20 ms once it was gone.
+
+Every ingestion number moves, and every engine's moves down. On an i9-13900K at ten million rows: pandas 0.111 to 0.063, Polars 0.049 to 0.036, DuckDB 0.197 to 0.142, firepanda 0.263 to 0.152. Reported peak RSS falls too, because the process is no longer holding two frames at once at the moment of measurement.
+
 ### The firepanda driver stops copying the file for `csv_narrow_typed`
 
 firepanda gained `read_csv_as`, a read of a path with a declared schema, so the driver no longer has to open the file and read the bytes itself. That mattered more than it sounds: doing its own IO gave up firepanda's memory mapping, so the one query in this suite that skips inference was also the only one paying to copy the whole file first. The comment in the driver saying no such overload existed is gone with it.
