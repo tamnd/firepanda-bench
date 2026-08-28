@@ -2,6 +2,14 @@
 
 Versions here track the harness, not the engines it measures and not firepanda itself. A change that alters what a published number means gets a minor bump, because a reader comparing two result files needs to know whether the measurement changed under them.
 
+## Unreleased
+
+### The firepanda driver stops copying the file for `csv_narrow_typed`
+
+firepanda gained `read_csv_as`, a read of a path with a declared schema, so the driver no longer has to open the file and read the bytes itself. That mattered more than it sounds: doing its own IO gave up firepanda's memory mapping, so the one query in this suite that skips inference was also the only one paying to copy the whole file first. The comment in the driver saying no such overload existed is gone with it.
+
+This changes a published number, and in firepanda's favour, so it is worth being plain about what it is not. The other three engines were already reading the file the way their own users would. This is the firepanda driver catching up to that, not a new allowance.
+
 ## v0.3.0
 
 A minor bump, and the reason is the rule at the top of this file. The harness measures something it did not measure before, and the numbers it publishes for the engines it already measured are unaffected, but a suite is a new claim about all four of them and it belongs in a version a reader can name.

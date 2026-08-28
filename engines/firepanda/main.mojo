@@ -43,7 +43,7 @@ from firepanda.dtype import Field, LogicalType, Schema
 from firepanda.frame.frame import DataFrame
 from firepanda.frame.groupby import AggSpec
 from firepanda.frame.series import Series
-from firepanda.io import ReadOptions, read_csv, read_csv_bytes_as
+from firepanda.io import ReadOptions, read_csv, read_csv_as
 from firepanda.join import JoinKind
 from firepanda.kernel import AggKind, subtract
 
@@ -539,14 +539,7 @@ def read_one(query: String, path: String) raises -> DataFrame:
     var options = ReadOptions()
     if query != "csv_narrow_typed":
         return read_csv(path, options)
-
-    # There is no `read_csv(path, schema, options)` overload yet, so the file is
-    # opened here. This is what `read_csv` does with the bytes anyway, so the two
-    # measurements still cover the same work.
-    var handle = open(path, "r")
-    var data = handle.read_bytes()
-    handle.close()
-    return read_csv_bytes_as(Span(data), narrow_schema(), options)
+    return read_csv_as(path, narrow_schema(), options)
 
 
 def column_bytes(ref column: AnyArray) raises -> Float64:
