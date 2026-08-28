@@ -846,6 +846,10 @@ def main() raises:
     var answer = DataFrame()
     var failure = String()
     for _ in range(runs):
+        # Free the previous run's frame before the clock starts. Assigning into
+        # `answer` below destroys it inside the timed region, and on the
+        # ingestion files that is gigabytes of free charged to the wrong run.
+        answer = DataFrame()
         var started = perf_counter_ns()
         # A read can fail on the file rather than on the code, which a generated
         # query cannot, so the run is reported as a failure with its reason

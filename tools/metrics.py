@@ -400,6 +400,12 @@ def measure(
     for index in range(runs):
         if index == 0 and before_cold is not None:
             before_cold()
+        # The previous run's answer is released here rather than by the
+        # assignment below, which happens inside the timed region. On a suite
+        # whose answers are gigabytes, freeing the last one was being charged to
+        # this one, and it is charged to every engine, so it does not favour any
+        # of them and it does compress the differences between them.
+        answer = None
         before = resource.getrusage(resource.RUSAGE_SELF)
         sampler = ResidentSampler()
         with sampler:
