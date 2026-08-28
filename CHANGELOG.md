@@ -2,7 +2,9 @@
 
 Versions here track the harness, not the engines it measures and not firepanda itself. A change that alters what a published number means gets a minor bump, because a reader comparing two result files needs to know whether the measurement changed under them.
 
-## Unreleased
+## v0.3.0
+
+A minor bump, and the reason is the rule at the top of this file. The harness measures something it did not measure before, and the numbers it publishes for the engines it already measured are unaffected, but a suite is a new claim about all four of them and it belongs in a version a reader can name.
 
 ### The ingestion suite runs
 
