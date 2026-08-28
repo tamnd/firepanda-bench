@@ -69,6 +69,15 @@ def check(path: Path) -> list[str]:
         if unpinned:
             problems.append(f"engines with no recorded version: {', '.join(sorted(unpinned))}")
 
+    # Present but empty passes the check above, and for a while every file
+    # written outside CI was exactly that: a firepanda column with no commit and
+    # no toolchain behind it. Only demanded when firepanda ran, because a
+    # pandas against Polars run on a machine with no Mojo on it owes neither.
+    if "firepanda" in (doc.get("engines") or {}):
+        for key in ("firepanda_ref", "mojo_version"):
+            if not str(doc.get(key) or "").strip():
+                problems.append(f"'{key}' is empty, so the firepanda numbers name nothing")
+
     if doc["io"] not in ("memory", "scan"):
         problems.append(f"io is '{doc['io']}', which is not a mode the harness runs")
 
