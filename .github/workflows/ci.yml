@@ -19,8 +19,10 @@ jobs:
     name: Harness checks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           enable-cache: true
 
@@ -29,10 +31,12 @@ jobs:
           [ -d tools ] || { echo "::notice::no harness yet"; exit 0; }
           uvx ruff check . && uvx ruff format --check .
 
+      # pyarrow is here rather than left to skip, because the tests that need it
+      # are the ones guarding the cross engine fingerprint, and a fingerprint
+      # regression that only shows up as a skipped test is a fingerprint
+      # regression that ships.
       - name: Tests
-        run: |
-          [ -d tests ] || { echo "::notice::no tests yet"; exit 0; }
-          uvx --with pytest pytest -q
+        run: uvx --with pytest --with pyarrow pytest -q
 
       # Every result file must name every engine version and the Mojo toolchain that
       # compiled firepanda. A result that cannot say what produced it is not a result.
@@ -41,10 +45,10 @@ jobs:
 
       # The suite is only credible if it reports losses. This is a crude check and it
       # is better than nothing: a published comparison in which firepanda wins every
-      # single row should be looked at by a human before it goes out.
+      # single row, or in which a competing engine crashed on a whole query group,
+      # should be looked at by a human before it goes out.
       - name: Flag suspiciously clean sweeps
         run: |
-          [ -f tools/check_sweep.py ] || { echo "::notice::sweep check not implemented yet"; exit 0; }
           for f in results/*.json; do
             [ -e "$f" ] || continue
             python3 tools/check_sweep.py "$f" || true
@@ -55,8 +59,10 @@ jobs:
     name: Link check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: lycheeverse/lychee-action@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2
         with:
           args: --no-progress --max-concurrency 4 './**/*.md'
           fail: true

