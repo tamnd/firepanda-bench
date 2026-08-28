@@ -15,5 +15,6 @@ __pycache__/
 # The compiled Mojo driver, rebuilt whenever its source is newer than it is.
 engines/firepanda/firepanda-driver
 
-# Result files are committed deliberately; scratch runs are not.
-results/scratch-*.json
+# Result files stay on the machine that produced them. CI uploads them as run
+# artifacts and draws the site from them, and nothing commits them back here.
+results/*.json
