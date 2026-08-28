@@ -15,10 +15,15 @@ ever drifts from the one in Python, the join queries fail that check on the firs
 run, because a join of two tables generated from different streams does not
 produce the same row count.
 
-Only the integer keyed queries are here. q1, q2, q3, q7 and q10 group by a string
-column, and a `StringArray` cannot live in a `DataFrame` yet. q8 needs a top-k per
-group and q9 needs a correlation, and neither kernel exists. Those are reported as
-unsupported, with the reason, rather than quietly dropped.
+Everything except q8 and q9 is here. q8 needs a top-k per group and q9 needs a
+correlation, and neither kernel exists. Those two are reported as unsupported,
+with the reason, rather than quietly dropped.
+
+The string keyed queries, q1, q2, q3, q7 and q10, arrived with firepanda 0.6.6
+and 0.6.7, which put a string column in a `DataFrame` and let one be a group by
+key and an aggregation input. An answer holding a text column is compared the
+same way the other engines' answers are, by the sum of a 64 bit FNV-1a over every
+value, which this file computes rather than borrows.
 
 The process prints one line of JSON on stdout. Anything else goes to stderr.
 
@@ -31,11 +36,20 @@ from std.time import perf_counter_ns
 
 from firepanda.array.any import AnyArray
 from firepanda.array.array import Array
+from firepanda.array.strings import StringArray, StringBuilder
 from firepanda.frame.frame import DataFrame
 from firepanda.frame.groupby import AggSpec
 from firepanda.frame.series import Series
 from firepanda.join import JoinKind
-from firepanda.kernel import AggKind
+from firepanda.kernel import AggKind, subtract
+
+# 64 bit FNV-1a, which is what `tools/engines/__init__.py` hashes a text value
+# with. The two constants are the published ones and the null constant is the
+# harness's own, and all three have to match it exactly or every string keyed
+# query is reported as a disagreement.
+comptime FNV_OFFSET: UInt64 = 0xCBF29CE484222325
+comptime FNV_PRIME: UInt64 = 0x100000001B3
+comptime NULL_HASH: UInt64 = 0x9E3779B97F4A7C15
 
 # The generator constants, matching `tools/data.py` exactly. The seeds are the
 # hexadecimal digits of pi and the multipliers are Vigna's splitmix64.
@@ -140,6 +154,38 @@ def uniform_column(
     return out^
 
 
+def text_column(
+    seed: UInt64, stream: Int, rows: Int, bound: Int
+) -> StringArray:
+    """Builds a string key column from one stream.
+
+    The Python generator writes `"id" + str(below(stream, bound))` and does not
+    add one to the draw, while the integer columns beside it do. That asymmetry
+    is in the h2oai generator and it is reproduced rather than tidied up, because
+    a column that differs from the file by one is a column that fails the
+    agreement check for a reason nobody would guess.
+
+    Every value fits the twelve bytes an element carries inline, up to a hundred
+    million rows, so this allocates no payload at these sizes.
+
+    Args:
+        seed: The stream seed.
+        stream: Which stream, counted in whole columns.
+        rows: How many rows.
+        bound: The number of distinct values.
+
+    Returns:
+        A string column of values from "id0" through "id" and `bound` minus one.
+    """
+    var builder = StringBuilder(rows)
+    var skip = stream * rows
+    var divisor = UInt64(bound)
+    for i in range(rows):
+        var value = String("id", word(seed, skip, i) % divisor)
+        builder.append(value.as_bytes())
+    return builder^.finish()
+
+
 def sequence_column(count: Int) -> Array[DType.int32]:
     """Builds the one through n key column a right join table has.
 
@@ -156,11 +202,14 @@ def sequence_column(count: Int) -> Array[DType.int32]:
 
 
 def groupby_frame(rows: Int) raises -> DataFrame:
-    """Builds the db-benchmark group by table, minus the string keys.
+    """Builds the db-benchmark group by table, all nine columns of it.
 
-    id1, id2 and id3 are the same draws as id4, id5 and id6 rendered as text, so
-    leaving them out costs nothing that the integer keyed queries need. They are
-    left out because a `DataFrame` cannot hold a string column yet.
+    The three string keys are built even for a query that reads none of them, and
+    that costs memory a narrower table would not. It is deliberate. pandas,
+    polars and DuckDB are all handed the whole nine column table for every query,
+    so a firepanda that generated four columns for q4 would be reported as using
+    less memory than three engines that were asked to hold more. The comparison
+    is worth more than the number.
 
     Args:
         rows: How many rows.
@@ -172,6 +221,9 @@ def groupby_frame(rows: Int) raises -> DataFrame:
     if high < 1:
         high = 1
     var columns: List[Series] = [
+        Series("id1", text_column(SEED, 0, rows, K)),
+        Series("id2", text_column(SEED, 1, rows, K)),
+        Series("id3", text_column(SEED, 2, rows, high)),
         Series("id4", bounded_column(SEED, 3, rows, K)),
         Series("id5", bounded_column(SEED, 4, rows, K)),
         Series("id6", bounded_column(SEED, 5, rows, high)),
@@ -277,7 +329,16 @@ def load(query: String, rows: Int) raises -> Tables:
     if small < 1:
         small = 1
 
-    if query == "q4" or query == "q5" or query == "q6":
+    if (
+        query == "q1"
+        or query == "q2"
+        or query == "q3"
+        or query == "q4"
+        or query == "q5"
+        or query == "q6"
+        or query == "q7"
+        or query == "q10"
+    ):
         return Tables(groupby_frame(rows), DataFrame(), DataFrame())
     if query == "j1":
         return Tables(
@@ -328,6 +389,22 @@ def run_query(query: String, ref tables: Tables) raises -> DataFrame:
     Raises:
         Error: If the query is not one this engine runs.
     """
+    if query == "q1":
+        var specs: List[AggSpec] = [AggSpec("v1", AggKind.SUM, "v1")]
+        return tables.groupby.group_by(keys("id1"), specs^, True, False)
+
+    if query == "q2":
+        var by: List[String] = ["id1", "id2"]
+        var specs: List[AggSpec] = [AggSpec("v1", AggKind.SUM, "v1")]
+        return tables.groupby.group_by(by^, specs^, True, False)
+
+    if query == "q3":
+        var specs: List[AggSpec] = [
+            AggSpec("v1", AggKind.SUM, "v1"),
+            AggSpec("v3", AggKind.MEAN, "v3"),
+        ]
+        return tables.groupby.group_by(keys("id3"), specs^, True, False)
+
     if query == "q4":
         var specs: List[AggSpec] = [
             AggSpec("v1", AggKind.MEAN, "v1"),
@@ -349,6 +426,35 @@ def run_query(query: String, ref tables: Tables) raises -> DataFrame:
         var specs: List[AggSpec] = [
             AggSpec("v3", AggKind.MEDIAN, "v3_median"),
             AggSpec("v3", AggKind.STD, "v3_sd"),
+        ]
+        return tables.groupby.group_by(by^, specs^, True, False)
+
+    if query == "q7":
+        var specs: List[AggSpec] = [
+            AggSpec("v1", AggKind.MAX, "v1_max"),
+            AggSpec("v2", AggKind.MIN, "v2_min"),
+        ]
+        var grouped = tables.groupby.group_by(keys("id3"), specs^, True, False)
+        # The answer is the key, the two extremes and their difference, and only
+        # the key and the difference are reported, which is what the other three
+        # engines report. Columns 1 and 2 are the two aggregates, in the order
+        # the specs were given.
+        var span = subtract(
+            grouped[1].as_typed[DType.int32](),
+            grouped[2].as_typed[DType.int32](),
+        )
+        var wide = grouped.with_column(Series("range_v1_v2", span^))
+        var wanted: List[String] = ["id3", "range_v1_v2"]
+        return wide.select(wanted^)
+
+    if query == "q10":
+        var by: List[String] = ["id1", "id2", "id3", "id4", "id5", "id6"]
+        var specs: List[AggSpec] = [
+            AggSpec("v3", AggKind.SUM, "v3"),
+            # A size rather than a count, so a null v1 would still be a row. The
+            # generated data has no nulls, and the other engines all ask for a
+            # size here, so this is the same question rather than a shortcut.
+            AggSpec("v1", AggKind.SIZE, "count"),
         ]
         return tables.groupby.group_by(by^, specs^, True, False)
 
@@ -409,6 +515,11 @@ def column_sum(ref column: AnyArray) raises -> Float64:
         The sum, or zero for a column of no numeric type.
     """
     var total = Float64(0)
+    if column.is_string():
+        # A string column's physical dtype is uint8, so without this the arm
+        # below would sum the first byte of every view and report it as a
+        # column sum. `column_hash` is what covers a text column.
+        return total
     var dtype = column.dtype()
     if dtype == DType.int32:
         var typed = column.as_typed[DType.int32]()
@@ -440,6 +551,33 @@ def column_sum(ref column: AnyArray) raises -> Float64:
         for i in range(len(typed)):
             if typed.is_valid(i):
                 total += Float64(typed[i])
+    return total
+
+
+def column_hash(ref column: AnyArray) raises -> UInt64:
+    """Digests a text column the way the harness digests one.
+
+    The harness sums a 64 bit FNV-1a over each value's bytes, modulo two to the
+    sixty four, and a null contributes a fixed constant. A sum rather than a hash
+    over sorted values, so that neither side has to sort, which is what makes it
+    something this file can compute at all.
+
+    Args:
+        column: The column, which must be a text column.
+
+    Returns:
+        The digest.
+    """
+    var total = UInt64(0)
+    ref text = column.strings()
+    for i in range(len(text)):
+        if not text.is_valid(i):
+            total += NULL_HASH
+            continue
+        var digest = FNV_OFFSET
+        for byte in text.unsafe_bytes(i):
+            digest = (digest ^ UInt64(byte)) * FNV_PRIME
+        total += digest
     return total
 
 
@@ -647,13 +785,28 @@ def main() raises:
     var cpu_after = read_cpu_ticks()
     var after = read_process_facts()
 
+    # Numbers go in `sums` and text goes in `hashes`, and a column is in exactly
+    # one of the two. The harness splits an answer the same way, so a column
+    # landing in the wrong one reads as a missing column rather than as a
+    # different value.
     var names = answer.names()
     var sums = String("{")
+    var hashes = String("{")
+    var summed = 0
+    var hashed = 0
     for i in range(len(names)):
-        if i > 0:
-            sums += ", "
-        sums += String(json_string(names[i]), ": ", column_sum(answer[i]))
+        if answer[i].is_string():
+            if hashed > 0:
+                hashes += ", "
+            hashes += String(json_string(names[i]), ": ", column_hash(answer[i]))
+            hashed += 1
+        else:
+            if summed > 0:
+                sums += ", "
+            sums += String(json_string(names[i]), ": ", column_sum(answer[i]))
+            summed += 1
     sums += "}"
+    hashes += "}"
 
     var runs_json = String("[")
     for i in range(len(timings)):
@@ -695,6 +848,8 @@ def main() raises:
             answer.width(),
             ', "sums": ',
             sums,
+            ', "hashes": ',
+            hashes,
             ', "peak_rss_bytes": ',
             after.peak_rss_bytes,
             ', "rss_before_load_bytes": ',

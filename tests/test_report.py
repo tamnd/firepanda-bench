@@ -92,3 +92,19 @@ def test_a_pairing_that_did_not_run_is_named_with_its_reason():
     }
     text = report.render(document, Path("x.json"))
     assert "groups by a string column" in text
+
+
+def test_tail_cell_reports_the_ratio_to_the_median():
+    """A p99 on its own says nothing about whether the tail is real."""
+    assert report.tail_cell({"ok": True, "p99_s": 0.25, "median_s": 0.2}) == "250.0 ms (1.25x)"
+
+
+def test_tail_cell_says_nothing_when_the_percentile_is_missing():
+    """An older result file has no p99, and a dash is the honest cell."""
+    assert report.tail_cell({"ok": True, "median_s": 0.2}) == "-"
+
+
+def test_cpu_cell_carries_the_core_count():
+    """Four times faster on sixteen cores is not four times faster on one."""
+    entry = {"ok": True, "cpu_user_s": 0.8, "cpu_sys_s": 0.2, "parallelism": 7.5}
+    assert report.cpu_cell(entry) == "1000 ms (7.5x)"

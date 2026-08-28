@@ -4,6 +4,30 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### firepanda runs thirteen of the fifteen db-benchmark queries
+
+q1, q2, q3, q7 and q10 were reported as unsupported because they group by a string column and firepanda could not hold one in a `DataFrame`. It can now, so the driver implements them and the five empty cells are filled with measurements. What is left is q8, which needs a top-k per group, and q9, which needs a correlation. Both say so in the table.
+
+The driver builds id1, id2 and id3 the way `tools/data.py` does, which is `"id"` and the draw with no one added, while the integer keys beside them are one based. That asymmetry is in the h2oai generator and reproducing it is the whole point: a text column that differs from the Parquet file by one would fail the agreement check for a reason nobody would guess at.
+
+### The driver digests text columns
+
+An answer with a string key was previously fingerprinted on its row count and its numeric sums alone, because the Mojo driver sent no text digests and the harness will not compare what one side did not send. The driver now computes the same summed 64 bit FNV-1a the harness computes, so all four engines are compared on the group keys as well as on the totals. At ten million rows, in both io modes, all four agree on all thirteen.
+
+### firepanda holds the whole table now, and its memory numbers moved
+
+The driver used to generate only the columns a query reads, so q4 was measured against a four column table while pandas, Polars and DuckDB were handed the whole nine column one. That flattered firepanda's peak resident memory on every group by query. It now builds all nine columns for every group by query, which is what the other three engines are given, and its memory numbers on q4, q5 and q6 are correspondingly higher than in v0.1.0. They are comparable now and they were not before.
+
+### Latency, beyond the median
+
+Every measurement carries `p90_s` and `p99_s` alongside the median and the interquartile range, and the report has two new tables: the ninety ninth percentile with its ratio to the median, and CPU seconds per run with how many cores that came to. An engine four times faster on sixteen cores and one four times faster on one core are not the same result and wall clock cannot tell them apart. At five runs a p99 is the slowest warm run, and `_percentile` says so rather than interpolating a value between two runs that were never observed.
+
+### Engine versions
+
+pandas 3.0.5, Polars 1.44.1, DuckDB 1.5.5, pyarrow 25.0.0. `pixi update` moves none of them: those are the newest builds in the channel as of this entry.
+
+### Result files are no longer kept in the repository
+
 Result files are no longer kept in the repository. The eight files that were committed for v0.1.0 have been removed from the history, `results/*.json` is ignored, and the benchmark workflow no longer pushes a results commit back to the branch. A run's files reach the site through the workflow artifact instead, and the artifact is the copy to download if you want to replay a published number with `pixi run repro`.
 
 The publish job lost `contents: write` and its push token along with the commit step. It now only downloads the artifacts, builds the site and deploys it.

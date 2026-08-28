@@ -3,8 +3,9 @@
 Everything else in this directory is a Python library the worker imports. firepanda
 is a Mojo library, so the adapter compiles a driver against the firepanda checkout
 and runs it as a child process. The driver prints one line of JSON: how long each
-run took, how much memory the kernel says it used, and the row count and column
-sums of its answer, which is what the cross engine fingerprint is built from.
+run took, how much memory the kernel says it used, and the row count, column sums
+and text column digests of its answer, which is what the cross engine fingerprint
+is built from.
 
 There is a fairness problem here and it is worth stating plainly rather than
 burying it in a footnote.
@@ -49,16 +50,29 @@ DRIVER_SOURCE = ROOT / "engines" / "firepanda" / "main.mojo"
 
 # Where the queries stand today. The driver refuses anything not in here, and the
 # reasons are reported next to the empty cells rather than left to be guessed.
-SUPPORTED = ("q4", "q5", "q6", "j1", "j2", "j3", "j4", "j5")
+#
+# The five string keyed group by queries moved in here when firepanda learned to
+# put a string column in a `DataFrame`, group by one and aggregate one. What is
+# left is the two queries that need a kernel nobody has written.
+SUPPORTED = (
+    "q1",
+    "q2",
+    "q3",
+    "q4",
+    "q5",
+    "q6",
+    "q7",
+    "q10",
+    "j1",
+    "j2",
+    "j3",
+    "j4",
+    "j5",
+)
 
 UNSUPPORTED = {
-    "q1": "groups by a string column, and a StringArray cannot live in a DataFrame yet",
-    "q2": "groups by two string columns, and a StringArray cannot live in a DataFrame yet",
-    "q3": "groups by a string column, and a StringArray cannot live in a DataFrame yet",
-    "q7": "groups by a string column, and a StringArray cannot live in a DataFrame yet",
     "q8": "needs a top-k per group, which is not a kernel that exists",
     "q9": "needs a correlation aggregate, which is not a kernel that exists",
-    "q10": "groups by three string columns, and a StringArray cannot live in a DataFrame yet",
 }
 
 

@@ -87,6 +87,49 @@ def cell(entry: dict | None) -> str:
     return f"{seconds:.2f} s"
 
 
+def tail_cell(entry: dict | None) -> str:
+    """Formats one engine's ninety ninth percentile against its median.
+
+    The ratio is the useful half. A p99 on its own says how slow the worst warm
+    run was and says nothing about whether that is noise or a real tail, and the
+    median is already in the table above.
+
+    Args:
+        entry: The result entry, or None.
+
+    Returns:
+        The cell text.
+    """
+    if entry is None or not entry.get("ok") or not entry.get("p99_s"):
+        return "-"
+    tail = entry["p99_s"]
+    median = entry.get("median_s") or 0.0
+    ratio = f" ({tail / median:.2f}x)" if median else ""
+    if tail < 0.001:
+        return f"{tail * 1e6:.0f} us{ratio}"
+    if tail < 1:
+        return f"{tail * 1000:.1f} ms{ratio}"
+    return f"{tail:.2f} s{ratio}"
+
+
+def cpu_cell(entry: dict | None) -> str:
+    """Formats one engine's CPU seconds and how many cores it kept busy.
+
+    Args:
+        entry: The result entry, or None.
+
+    Returns:
+        The cell text.
+    """
+    if entry is None or not entry.get("ok"):
+        return "-"
+    cpu = float(entry.get("cpu_user_s", 0.0)) + float(entry.get("cpu_sys_s", 0.0))
+    parallelism = float(entry.get("parallelism", 0.0))
+    if cpu <= 0:
+        return "-"
+    return f"{cpu * 1000:.0f} ms ({parallelism:.1f}x)"
+
+
 def bytes_cell(entry: dict | None) -> str:
     """Formats one engine's peak resident memory.
 
@@ -239,6 +282,40 @@ def render(document: dict, path: Path) -> str:
         if not any(keys.values()) or not comparable(document, query.name, engines):
             continue
         row = " | ".join(bytes_cell(keys[e]) for e in engines)
+        lines.append(f"| {query.name} | {row} |")
+
+    lines.append("")
+    lines.append(
+        "The ninety ninth percentile of the warm runs, and what it is as a "
+        "multiple of the median. A number close to one is a query that costs the "
+        "same every time it is asked, and that is worth as much as the median to "
+        "anyone who has to run it behind something."
+    )
+    lines.append("")
+    lines.append("| query | " + " | ".join(engines) + " |")
+    lines.append("| --- | " + " | ".join("---:" for _ in engines) + " |")
+    for query in query_registry.for_suite(suite):
+        keys = {e: document["results"].get(f"{query.name}/{e}") for e in engines}
+        if not any(keys.values()) or not comparable(document, query.name, engines):
+            continue
+        row = " | ".join(tail_cell(keys[e]) for e in engines)
+        lines.append(f"| {query.name} | {row} |")
+
+    lines.append("")
+    lines.append(
+        "CPU seconds per run, user and system together, and how many cores that "
+        "came to while the query was in flight. An engine that is four times "
+        "faster on sixteen cores and one that is four times faster on one are "
+        "not the same result, and the wall clock table cannot tell them apart."
+    )
+    lines.append("")
+    lines.append("| query | " + " | ".join(engines) + " |")
+    lines.append("| --- | " + " | ".join("---:" for _ in engines) + " |")
+    for query in query_registry.for_suite(suite):
+        keys = {e: document["results"].get(f"{query.name}/{e}") for e in engines}
+        if not any(keys.values()) or not comparable(document, query.name, engines):
+            continue
+        row = " | ".join(cpu_cell(keys[e]) for e in engines)
         lines.append(f"| {query.name} | {row} |")
 
     lines.append("")
