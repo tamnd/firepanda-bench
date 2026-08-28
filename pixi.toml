@@ -11,7 +11,12 @@ platforms = ["linux-64", "linux-aarch64", "osx-arm64"]
 # comparison against an unnamed version of anything is not a comparison.
 [dependencies]
 python = "3.13.*"
-modular = "*"
+
+# The Mojo toolchain is deliberately not here. It lives in the firepanda checkout,
+# pinned by that repository, and the driver in `engines/firepanda` is built with
+# it. Declaring it here as well would mean two pins for one toolchain, and it also
+# makes this environment unsolvable: the `modular` package constrains protobuf and
+# through it the Python version, which drags pandas and pyarrow backwards.
 
 # pandas 3.0 and not 2.x, deliberately. 2.x is what most people are running and it is
 # not what firepanda is competing with; using it would inflate every number.
@@ -21,18 +26,27 @@ polars = ">=1.43,<2"
 duckdb = ">=1.1"
 numpy = "*"
 
-[feature.report.dependencies]
-altair = "*"
-jinja2 = "*"
+# From M9. Only solvable on linux-64 with a CUDA-capable runner, and only from the
+# RAPIDS channel, which is why the channel is named on the feature rather than in
+# the workspace: adding it globally would let it satisfy packages it should not.
+[feature.gpu]
+channels = ["https://conda.anaconda.org/rapidsai", "https://conda.anaconda.org/nvidia"]
+# Only linux-64. cuDF has never been built for macOS and listing the workspace's
+# other platforms here makes the whole manifest unsolvable on a developer laptop,
+# because pixi solves every environment for every platform before it installs one.
+platforms = ["linux-64"]
 
-# From M9. Only solvable on linux-64 with a CUDA-capable runner.
 [feature.gpu.dependencies]
 cudf = "*"
 
 [environments]
 default = { solve-group = "main" }
-report = { features = ["report"], solve-group = "main" }
-gpu = { features = ["gpu"] }
+# The gpu environment is defined by the feature above but deliberately not listed
+# here. pixi solves every listed environment for every platform before installing
+# any of them, and the RAPIDS packages need a CUDA version pin that depends on the
+# runner. Turning it on before there is a GPU runner to pin against would make the
+# manifest unsolvable on every machine that currently runs the suite. It gets
+# added at M9 along with that runner.
 
 [tasks]
 # Generate or fetch datasets. db-benchmark data is generated, TPC-H uses dbgen.
@@ -47,9 +61,22 @@ bench = "python tools/run.py"
 repro = "python tools/repro.py"
 
 report = "python tools/report.py"
-site = { cmd = "python tools/site.py", environment = "report" }
 env-report = "python tools/env_report.py"
+
+# Checks a dataframe engine's TPC-H answers against the specification's published
+# validation output. A query that does not reproduce it is not in the table.
+validate-tpch = "python tools/validate_tpch.py"
+
+# Checks a result file carries everything the report and the site need, and that
+# every pairing which did not run says why.
+validate-results = "python tools/validate_results.py"
 
 # Crude, and better than nothing: a published comparison in which firepanda wins
 # every single row gets looked at by a human before it goes out.
 check-sweep = "python tools/check_sweep.py"
+
+# The chart is emitted as a Vega-Lite specification with the data inline and the
+# renderer loaded from a CDN, so this needs nothing that is not already installed.
+# It used to need altair and jinja2 in an environment of their own, which meant a
+# second solve of the whole dependency set to draw a line chart.
+site = "python tools/site.py"
