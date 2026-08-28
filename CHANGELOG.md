@@ -4,6 +4,10 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+## v0.2.0
+
+A minor bump, and the reason is the rule at the top of this file. Two changes here alter what a published number means. firepanda's peak resident memory on the group by queries was measured against a narrower table than the other three engines were given, and it now is not, so those numbers moved and a v0.1.0 memory figure is not comparable with a v0.2.0 one. And a result file now names the build that produced it, which every file before this one either failed to do or did wrongly.
+
 ### A result file names the build that produced it
 
 The commit and the toolchain were read out of an `env.json` and out of nothing else, and `pixi run bench` does not write one, so every file produced outside CI carried an empty `firepanda_ref`. Six did. Four others carried a commit from a checkout that had been replaced two releases earlier, which is worse, because it attributes the numbers to the wrong build and says so with the same confidence as a correct one. The run probes the machine it is running on, and an `env.json` is now only consulted for the fields the probe could not fill.
