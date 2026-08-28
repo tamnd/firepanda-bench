@@ -4,6 +4,12 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # A week between an action's release and the pull request that adopts it. Every
+    # action here is pinned to a commit, so an upgrade rewrites a hash, and the two
+    # recent supply chain incidents in this ecosystem were both caught within days
+    # of the tag moving.
+    cooldown:
+      default-days: 7
     groups:
       actions:
         patterns: ["*"]
