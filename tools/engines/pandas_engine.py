@@ -16,6 +16,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import pyarrow as pa
+import queries
 
 from . import pandas_tpch
 
@@ -45,8 +46,11 @@ def load(paths: dict[str, str], suite: str = "db-benchmark", io: str = "memory")
         io: How the tables should reach the engine.
 
     Returns:
-        A mapping from table name to a DataFrame.
+        A mapping from table name to a DataFrame, or to a path for the ingestion
+        suite, where reading the file is the thing being timed.
     """
+    if suite == "ingestion":
+        return dict(paths)
     # Arrow backed, because that is what pandas 3.0 recommends and what makes the
     # comparison one between engines rather than one between memory layouts.
     frames = {name: pd.read_parquet(path, dtype_backend="pyarrow") for name, path in paths.items()}
@@ -400,3 +404,72 @@ def _tpch(name: str):
 
 
 TPCH_QUERIES = {name: _tpch(name) for name in pandas_tpch.QUERIES}
+
+
+# What `read_csv` is given. The pyarrow engine rather than the default one, which
+# is the whole reason this suite is worth publishing: pandas has a multithreaded
+# Arrow reader, most people do not know it is there, and comparing against the
+# single threaded C parser instead would be comparing against a slower
+# configuration of a competitor. On the narrow file here the C engine takes 257 ms
+# against the pyarrow engine's 9, so the choice is not a detail.
+CSV_OPTIONS = {"engine": "pyarrow", "dtype_backend": "pyarrow"}
+
+# The neutral names in `queries.NARROW_SCHEMA`, in Arrow backed pandas.
+PANDAS_TYPES = {
+    "int64": "int64[pyarrow]",
+    "float64": "double[pyarrow]",
+    "string": "string[pyarrow]",
+}
+
+
+def read_one(ctx: dict, table: str, dtype: dict | None = None):
+    """Reads one CSV file.
+
+    The frame is returned as pandas rather than converted to Arrow, which is what
+    every other query in this harness does. Here the conversion would be inside
+    the timed region and the read is the thing being timed, so the harness does it
+    afterwards. It costs a millisecond on an Arrow backed frame and it is not this
+    engine's to pay.
+
+    The pyarrow engine cannot read a value with a line feed inside it. pyarrow's
+    reader has an option for that, `newlines_in_values`, it is off by default and
+    pandas does not expose it, so on the quoted file the read fails outright with
+    "Expected 3 columns, got 2". That is a real limit of the configuration a
+    pandas user would reach for first, and what such a user does next is drop back
+    to the default C engine, so that is what happens here and the result carries a
+    note saying so. The decision is taken once and remembered, so only the cold
+    run pays for the attempt.
+
+    Args:
+        ctx: The paths from `load`.
+        table: Which file.
+        dtype: Declared types, or None to infer them.
+
+    Returns:
+        The frame that was read.
+    """
+    options = dict(CSV_OPTIONS)
+    if dtype is not None:
+        options["dtype"] = dtype
+    if ctx.get("fallback"):
+        return pd.read_csv(ctx[table], dtype_backend="pyarrow")
+    try:
+        return pd.read_csv(ctx[table], **options)
+    except pd.errors.ParserError as exc:
+        ctx["fallback"] = True
+        ctx["note"] = (
+            "read with the default C engine, not the pyarrow engine, which "
+            f"refused this file: {str(exc).splitlines()[0][:120]}"
+        )
+        return pd.read_csv(ctx[table], dtype_backend="pyarrow")
+
+
+INGESTION_QUERIES = {
+    "csv_narrow": lambda ctx: read_one(ctx, "narrow"),
+    "csv_narrow_typed": lambda ctx: read_one(
+        ctx, "narrow", {name: PANDAS_TYPES[kind] for name, kind in queries.NARROW_SCHEMA}
+    ),
+    "csv_wide": lambda ctx: read_one(ctx, "wide"),
+    "csv_quoted": lambda ctx: read_one(ctx, "quoted"),
+    "csv_nulls": lambda ctx: read_one(ctx, "nulls"),
+}

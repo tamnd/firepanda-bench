@@ -15,6 +15,7 @@ from __future__ import annotations
 import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
+import queries
 
 NAME = "duckdb"
 
@@ -61,9 +62,13 @@ def load(paths: dict[str, str], suite: str = "db-benchmark", io: str = "memory")
         io: How the tables should reach the engine.
 
     Returns:
-        A context holding the connection and keeping the Arrow tables alive.
+        A context holding the connection and keeping the Arrow tables alive, or
+        the paths for the ingestion suite, where reading the file is the thing
+        being timed.
     """
     connection = duckdb.connect()
+    if suite == "ingestion":
+        return {"con": connection, "tables": {}, "paths": dict(paths)}
     if suite == "tpch":
         connection.execute("INSTALL tpch")
         connection.execute("LOAD tpch")
@@ -236,3 +241,51 @@ def _make_tpch(name: str):
 
 
 TPCH_QUERIES = {name: _make_tpch(name) for name in TPCH_SQL}
+
+
+# The neutral names in `queries.NARROW_SCHEMA`, in DuckDB.
+DUCKDB_TYPES = {"int64": "BIGINT", "float64": "DOUBLE", "string": "VARCHAR"}
+
+
+def read_one(ctx: dict, table: str, columns: dict | None = None):
+    """Reads one CSV file into a DuckDB table and hands the rows back.
+
+    The read lands in a real table rather than a view, for the same reason every
+    other query here ends in `CREATE OR REPLACE TABLE`: a view would return a
+    cursor and measure planning.
+
+    What is returned is the relation over that table rather than its Arrow
+    conversion, which is what `run_sql` would have done. The other two Python
+    engines hand back their own frame here so the conversion falls outside the
+    timing, and DuckDB gets the same treatment; the harness pulls the rows out
+    afterwards. The `CREATE TABLE` has already forced the whole file through the
+    parser by the time this returns, so nothing about the read is deferred.
+
+    Args:
+        ctx: The connection and paths from `load`.
+        table: Which file.
+        columns: Declared types, or None to let the sniffer work them out.
+
+    Returns:
+        A relation over the rows that were read.
+    """
+    path = sql_literal(ctx["paths"][table])
+    if columns is None:
+        source = f"read_csv('{path}')"
+    else:
+        declared = ", ".join(f"'{name}': '{kind}'" for name, kind in columns.items())
+        source = f"read_csv('{path}', header=true, auto_detect=false, columns={{{declared}}})"
+    connection = ctx["con"]
+    connection.execute(f"CREATE OR REPLACE TABLE ans AS SELECT * FROM {source}")
+    return connection.sql("SELECT * FROM ans")
+
+
+INGESTION_QUERIES = {
+    "csv_narrow": lambda ctx: read_one(ctx, "narrow"),
+    "csv_narrow_typed": lambda ctx: read_one(
+        ctx, "narrow", {name: DUCKDB_TYPES[kind] for name, kind in queries.NARROW_SCHEMA}
+    ),
+    "csv_wide": lambda ctx: read_one(ctx, "wide"),
+    "csv_quoted": lambda ctx: read_one(ctx, "quoted"),
+    "csv_nulls": lambda ctx: read_one(ctx, "nulls"),
+}

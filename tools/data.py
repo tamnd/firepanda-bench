@@ -9,15 +9,24 @@ ones are the high cardinality ones, because that is where a hash table either
 works or does not.
 
 The generator is splitmix64 rather than numpy's own, and that is a deliberate
-choice with a specific payoff. firepanda cannot read a file yet, so the only way
-to benchmark it against pandas on the same data today is for it to generate the
-same data. splitmix64 over a counter is four lines in any language, it is what
-`firepanda/testing/rng.mojo` already implements, and a Mojo engine seeded the same
-way produces the same column byte for byte. The harness verifies that by comparing
-answers rather than trusting it.
+choice with a specific payoff. firepanda cannot read a Parquet file yet, so the
+only way to benchmark it against pandas on the same data today is for it to
+generate the same data. splitmix64 over a counter is four lines in any language,
+it is what `firepanda/testing/rng.mojo` already implements, and a Mojo engine
+seeded the same way produces the same column byte for byte. The harness verifies
+that by comparing answers rather than trusting it.
+
+The ingestion suite is the exception, and it is the reason that suite exists. Its
+data is written as CSV and every engine including firepanda reads the same file,
+so nothing there depends on two generators agreeing. The four files it generates
+are deliberately different from each other rather than four sizes of the same
+thing: a narrow one that is what most files look like, a wide one that trades
+bytes for fields, a quoted one that no reader can shortcut, and one that is nine
+tenths empty.
 
 Usage:
     python tools/data.py --suite db-benchmark --size 0.5GB [--formats parquet,csv]
+    python tools/data.py --suite ingestion --size 10M
 """
 
 from __future__ import annotations
@@ -52,8 +61,29 @@ SIZES = {
     "50GB": 1_000_000_000,
 }
 
+# The ingestion sizes, named by the row count of the narrow file rather than by
+# bytes, because the four files in this suite are different shapes on purpose and
+# a single byte figure would describe none of them.
+INGESTION_SIZES = {"1M": 1_000_000, "10M": 10_000_000, "100M": 100_000_000}
+
 # The size to build when none is named, per suite.
-DEFAULT_SIZE = {"db-benchmark": "0.5GB", "tpch": "sf1"}
+DEFAULT_SIZE = {"db-benchmark": "0.5GB", "tpch": "sf1", "ingestion": "10M"}
+
+# How many columns the wide ingestion file has.
+WIDE_COLUMNS = 50
+
+# The wide file gets a tenth of the rows the others do. Fifty columns at the same
+# row count is a ten times larger file, and what the wide case is here to measure
+# is the cost of a field rather than the cost of a byte, so holding the file size
+# roughly level and moving the fields is the comparison that isolates it.
+WIDE_DIVISOR = 10
+
+# How many columns the mostly-null file has beside its dense key.
+NULL_COLUMNS = 8
+
+# One field in ten survives in the mostly-null file. Nine tenths empty is past the
+# point where a reader that branches per value can hide it.
+NULL_KEEP = 10
 
 # The h2oai G1 cardinality factor. id1 and id2 take K distinct values, id3 takes
 # N/K, and that ratio is the whole point of the design.
@@ -208,6 +238,114 @@ def generate_join_tables(rows: int, seed: int = 0x243F6A8885A308D3) -> dict[str,
     }
 
 
+def _digits(count: int) -> np.ndarray:
+    """Returns `0` through `count - 1` as text, without a Python loop.
+
+    Args:
+        count: How many.
+
+    Returns:
+        An array of strings.
+    """
+    return np.arange(count).astype(str)
+
+
+def generate_ingestion(rows: int, seed: int = 0x243F6A8885A308D3) -> dict[str, pa.Table]:
+    """Builds the four ingestion tables.
+
+    Args:
+        rows: How many rows in the narrow, quoted and mostly-null files. The wide
+            file gets a tenth of that, for the reason `WIDE_DIVISOR` gives.
+        seed: The generator seed, recorded in the manifest.
+
+    Returns:
+        A mapping from table name to table.
+    """
+    tables = {}
+
+    def stream(salt: int, count: int, index: int) -> np.ndarray:
+        return splitmix64(seed ^ salt, count, skip=index * count)
+
+    # Narrow: two integers, a float and a short string. This is the shape of the
+    # file in the tutorial, and the one a first impression is made on.
+    index = np.arange(rows, dtype=np.int64)
+    tables["narrow"] = pa.table(
+        {
+            "id": pa.array(index, type=pa.int64()),
+            "pair": pa.array(_below(stream(0x11, rows, 0), 1_000_000), type=pa.int64()),
+            # Six decimal places, so the value that is written is a value that
+            # round trips through text rather than one the writer had to round.
+            "score": pa.array(
+                np.round(
+                    (stream(0x11, rows, 1) >> np.uint64(11)).astype(np.float64)
+                    / float(1 << 53)
+                    * 100.0,
+                    6,
+                ),
+                type=pa.float64(),
+            ),
+            "label": pa.array(np.char.add("row", _digits(rows))),
+        }
+    )
+
+    # Wide: fifty columns of three types in a repeating pattern, so a reader that
+    # dispatches per field rather than per column pays fifty times here.
+    wide_rows = max(rows // WIDE_DIVISOR, 1)
+    wide = {}
+    for column in range(WIDE_COLUMNS):
+        words = stream(0x22, wide_rows, column)
+        name = f"c{column:02d}"
+        if column % 5 < 2:
+            wide[name] = pa.array(_below(words, 1_000_000), type=pa.int64())
+        elif column % 5 < 4:
+            wide[name] = pa.array(
+                np.round((words >> np.uint64(11)).astype(np.float64) / float(1 << 53) * 100.0, 6),
+                type=pa.float64(),
+            )
+        else:
+            wide[name] = pa.array(np.char.add("s", _below(words, 1_000).astype(str)))
+    tables["wide"] = pa.table(wide)
+
+    # Quoted: every note carries a delimiter, an embedded line feed and a pair of
+    # quotes, so the writer has to quote every one of them and no reader can find
+    # a row boundary by looking for a newline.
+    text = _digits(rows)
+    note = np.char.add("line one,", text)
+    note = np.char.add(note, '\nline two "')
+    note = np.char.add(note, text)
+    note = np.char.add(note, '"')
+    tables["quoted"] = pa.table(
+        {
+            "id": pa.array(index, type=pa.int64()),
+            "note": pa.array(note),
+            "label": pa.array(np.char.add("row", text)),
+        }
+    )
+
+    # Mostly null: a dense key and eight columns that are nine tenths empty.
+    #
+    # Every one of the eight is numeric, and that is not an oversight. Engines
+    # disagree about whether an empty text field is a null or an empty string,
+    # pandas and Polars answer differently by default, and both answers are
+    # defensible. A file that asked the question would report a disagreement
+    # about semantics as a disagreement about the answer.
+    sparse = {"id": pa.array(index, type=pa.int64())}
+    for column in range(NULL_COLUMNS):
+        words = stream(0x33, rows, column)
+        keep = (words % np.uint64(NULL_KEEP)) == np.uint64(0)
+        if column % 2 == 0:
+            values = _below(words, 1_000_000)
+            sparse[f"n{column}"] = pa.array(values, type=pa.int64(), mask=~keep)
+        else:
+            values = np.round(
+                (words >> np.uint64(11)).astype(np.float64) / float(1 << 53) * 100.0, 6
+            )
+            sparse[f"n{column}"] = pa.array(values, type=pa.float64(), mask=~keep)
+    tables["nulls"] = pa.table(sparse)
+
+    return tables
+
+
 def _write(table: pa.Table, base: Path, formats: list[str]) -> dict:
     """Writes a table in each requested format and digests it.
 
@@ -280,12 +418,14 @@ def build(suite: str, size: str, formats: list[str], force: bool) -> Path:
 
         return tpch.build(size, DATA_ROOT, force)
 
-    if suite != "db-benchmark":
-        raise SystemExit(f"unknown suite '{suite}'. Known: db-benchmark, tpch.")
-    if size not in SIZES:
-        raise SystemExit(f"unknown size '{size}'. Known: {', '.join(SIZES)}")
+    if suite not in ("db-benchmark", "ingestion"):
+        raise SystemExit(f"unknown suite '{suite}'. Known: db-benchmark, ingestion, tpch.")
 
-    rows = SIZES[size]
+    known = INGESTION_SIZES if suite == "ingestion" else SIZES
+    if size not in known:
+        raise SystemExit(f"unknown size '{size}' for {suite}. Known: {', '.join(known)}")
+
+    rows = known[size]
     out = DATA_ROOT / suite / size
     out.mkdir(parents=True, exist_ok=True)
     manifest_path = out / "manifest.json"
@@ -294,10 +434,19 @@ def build(suite: str, size: str, formats: list[str], force: bool) -> Path:
         print(f"{manifest_path} exists, reusing. Pass --force to regenerate.")
         return manifest_path
 
+    if suite == "ingestion":
+        # The reader is the thing under test, so there is nothing to write but
+        # CSV and asking for Parquet here would be asking for a file no query in
+        # the suite opens.
+        formats = ["csv"]
+
     print(f"generating {rows:,} rows for {suite} at {size}")
     started = time.perf_counter()
-    tables = {"groupby": generate_groupby(rows)}
-    tables.update(generate_join_tables(rows))
+    if suite == "ingestion":
+        tables = generate_ingestion(rows)
+    else:
+        tables = {"groupby": generate_groupby(rows)}
+        tables.update(generate_join_tables(rows))
     generated_s = time.perf_counter() - started
 
     files = {}
@@ -309,12 +458,17 @@ def build(suite: str, size: str, formats: list[str], force: bool) -> Path:
         "suite": suite,
         "size": size,
         "rows": rows,
-        "cardinality_factor": K,
+        # Per table, because the ingestion tables are not all the same height and
+        # a reader working out throughput from the suite's row count would be
+        # wrong about the wide file by a factor of ten.
+        "table_rows": {name: table.num_rows for name, table in tables.items()},
         "generator": "splitmix64 counter stream, matching firepanda/testing/rng.mojo",
         "seed": "0x243F6A8885A308D3",
         "generated_s": round(generated_s, 3),
         "files": files,
     }
+    if suite == "db-benchmark":
+        manifest["cardinality_factor"] = K
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
     print(f"wrote {manifest_path}")
     return manifest_path
@@ -330,11 +484,14 @@ def main(argv: list[str] | None = None) -> int:
         A process exit status.
     """
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--suite", default="db-benchmark", choices=("db-benchmark", "tpch"))
+    parser.add_argument(
+        "--suite", default="db-benchmark", choices=("db-benchmark", "tpch", "ingestion")
+    )
     parser.add_argument(
         "--size",
         default="",
-        help="0.5GB, 5GB or 50GB for db-benchmark; sf1, sf10 or sf100 for tpch",
+        help="0.5GB, 5GB or 50GB for db-benchmark; sf1, sf10 or sf100 for tpch; "
+        "1M, 10M or 100M for ingestion",
     )
     parser.add_argument(
         "--formats",

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import polars as pl
 import pyarrow as pa
+import queries
 
 from . import polars_tpch
 
@@ -43,8 +44,12 @@ def load(paths: dict[str, str], suite: str = "db-benchmark", io: str = "memory")
         io: How the tables should reach the engine.
 
     Returns:
-        A mapping from table name to a frame, eager or lazy depending on `io`.
+        A mapping from table name to a frame, eager or lazy depending on `io`, or
+        to a path for the ingestion suite, where reading the file is the thing
+        being timed.
     """
+    if suite == "ingestion":
+        return dict(paths)
     if io == "scan":
         return {name: pl.scan_parquet(path) for name, path in paths.items()}
     return {name: pl.read_parquet(path) for name, path in paths.items()}
@@ -380,3 +385,48 @@ def _tpch(name: str):
 
 
 TPCH_QUERIES = {name: _tpch(name) for name in polars_tpch.QUERIES}
+
+
+# The neutral names in `queries.NARROW_SCHEMA`, in Polars.
+POLARS_TYPES = {"int64": pl.Int64, "float64": pl.Float64, "string": pl.String}
+
+
+def read_one(ctx: dict, table: str, schema: dict | None = None) -> pl.DataFrame:
+    """Reads one CSV file.
+
+    `read_csv` rather than `scan_csv().collect()`, and the difference is worth a
+    sentence because everywhere else in this harness Polars is used lazily. There
+    is no projection or predicate to push into a read of a whole file, so the lazy
+    form would do the same work behind a planner, and the eager call is what a
+    Polars user writes when what they want is the file.
+
+    No `finish` here, unlike every other query in this file, and that one missing
+    call was worth an order of magnitude. Polars stores text as a view into a
+    buffer and Arrow wants it offset encoded, so `to_arrow` rebuilds every string
+    column: on the wide file the read takes 9.6 ms and the conversion 707 ms.
+    Timing the conversion would have published Polars as the slowest CSV reader
+    here when it is among the fastest. The harness converts afterwards, outside the
+    timed region, where every engine pays for its own conversion equally.
+
+    Args:
+        ctx: The paths from `load`.
+        table: Which file.
+        schema: Declared types, or None to infer them.
+
+    Returns:
+        The frame that was read.
+    """
+    if schema is None:
+        return pl.read_csv(ctx[table])
+    return pl.read_csv(ctx[table], schema=schema)
+
+
+INGESTION_QUERIES = {
+    "csv_narrow": lambda ctx: read_one(ctx, "narrow"),
+    "csv_narrow_typed": lambda ctx: read_one(
+        ctx, "narrow", {name: POLARS_TYPES[kind] for name, kind in queries.NARROW_SCHEMA}
+    ),
+    "csv_wide": lambda ctx: read_one(ctx, "wide"),
+    "csv_quoted": lambda ctx: read_one(ctx, "quoted"),
+    "csv_nulls": lambda ctx: read_one(ctx, "nulls"),
+}

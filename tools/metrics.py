@@ -24,6 +24,7 @@ of the query. The worker measures itself, and the parent measures the worker.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import math
 import os
@@ -91,7 +92,12 @@ class Sample:
     """The most threads the process had at once, sampled alongside the memory."""
 
     cold: bool
-    """Whether this was the first run, before anything was warm."""
+    """Whether this was the first run, before anything was warm.
+
+    For the ingestion suite it means more than that: the file is evicted from the
+    page cache before this run, so it is cold in the sense that matters for a
+    reader. `block_reads` on this sample is what says whether the eviction took.
+    """
 
 
 @dataclass
@@ -320,7 +326,59 @@ class ResidentSampler:
             self._thread = None
 
 
-def measure(run, runs: int, cold_first: bool = True) -> tuple[list[Sample], object]:
+def evict_page_cache(paths: list[str]) -> bool:
+    """Asks the kernel to forget the pages of some files, so a read is really cold.
+
+    A cold cache number and a warm cache one answer different questions, and for a
+    file reader both are worth having: warm measures the parser, cold measures the
+    parser and the storage together. What makes the distinction hard is that by
+    the time a benchmark runs, the file it is about to read has just been written
+    or just been read, and is entirely in the page cache. Calling the first run
+    cold does not make it cold.
+
+    `POSIX_FADV_DONTNEED` drops a file's clean pages without any privilege, which
+    is the part that matters: dropping the whole cache needs root, and a benchmark
+    that has to be run as root is a benchmark nobody runs. The pages have to be
+    clean first, so the file is flushed before it is dropped.
+
+    This does not claim to have succeeded. The kernel is entitled to ignore the
+    hint, another process may be holding the same pages, and macOS has no
+    equivalent call at all. The evidence that a run really was cold is in the
+    measurement rather than here: a cold run that actually went to the device has
+    a `block_reads` count in the thousands and a warm one has none.
+
+    Args:
+        paths: The files to drop.
+
+    Returns:
+        Whether the call was available and raised nothing for every file.
+    """
+    if not hasattr(os, "posix_fadvise"):
+        return False
+    dropped = True
+    for path in paths:
+        try:
+            fd = os.open(path, os.O_RDONLY)
+        except OSError:
+            dropped = False
+            continue
+        try:
+            # A read only descriptor may refuse the flush on some filesystems, and
+            # a file this harness generated and has not touched since is clean
+            # anyway, so a refusal is not a reason to skip the eviction.
+            with contextlib.suppress(OSError):
+                os.fsync(fd)
+            os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+        except OSError:
+            dropped = False
+        finally:
+            os.close(fd)
+    return dropped
+
+
+def measure(
+    run, runs: int, cold_first: bool = True, before_cold=None
+) -> tuple[list[Sample], object]:
     """Runs a callable several times and records everything about each run.
 
     The callable must consume its own result. A lazy engine that is never asked
@@ -331,6 +389,8 @@ def measure(run, runs: int, cold_first: bool = True) -> tuple[list[Sample], obje
         run: A callable taking no arguments and returning the query's answer.
         runs: How many times to run it.
         cold_first: Whether to mark the first run as the cold one.
+        before_cold: A callable run once before the first run and outside its
+            timing, for a suite that has to arrange for the first run to be cold.
 
     Returns:
         The samples and the answer from the last run.
@@ -338,6 +398,8 @@ def measure(run, runs: int, cold_first: bool = True) -> tuple[list[Sample], obje
     samples: list[Sample] = []
     answer = None
     for index in range(runs):
+        if index == 0 and before_cold is not None:
+            before_cold()
         before = resource.getrusage(resource.RUSAGE_SELF)
         sampler = ResidentSampler()
         with sampler:

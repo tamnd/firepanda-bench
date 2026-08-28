@@ -130,6 +130,61 @@ def cpu_cell(entry: dict | None) -> str:
     return f"{cpu * 1000:.0f} ms ({parallelism:.1f}x)"
 
 
+def cold_cell(entry: dict | None) -> str:
+    """Formats the first run against the warm median.
+
+    Args:
+        entry: The result entry, or None.
+
+    Returns:
+        The cell text.
+    """
+    if entry is None or not entry.get("ok") or not entry.get("cold_s"):
+        return "-"
+    cold = entry["cold_s"]
+    median = entry.get("median_s") or 0.0
+    ratio = f" ({cold / median:.2f}x)" if median else ""
+    if cold < 1:
+        return f"{cold * 1000:.1f} ms{ratio}"
+    return f"{cold:.2f} s{ratio}"
+
+
+def rate_cell(entry: dict | None, size_bytes: int) -> str:
+    """Formats a read as megabytes of file per second.
+
+    Seconds are the wrong unit for comparing a reader across four files of
+    different shapes: the wide file has a tenth of the rows of the narrow one and
+    about the same number of bytes, and a table in seconds makes that look like a
+    tenfold regression rather than the per field cost it is.
+
+    Args:
+        entry: The result entry, or None.
+        size_bytes: How large the file being read is.
+
+    Returns:
+        The cell text.
+    """
+    if entry is None or not entry.get("ok") or not entry.get("median_s") or not size_bytes:
+        return "-"
+    return f"{size_bytes / entry['median_s'] / 1e6:,.0f}"
+
+
+def file_bytes(document: dict, query) -> int:
+    """Returns the size of the file an ingestion query reads.
+
+    Args:
+        document: The result document.
+        query: The query.
+
+    Returns:
+        The byte count, or zero if the manifest does not have one.
+    """
+    if not query.needs:
+        return 0
+    entry = document.get("dataset", {}).get("files", {}).get(query.needs[0], {})
+    return int(entry.get("csv", {}).get("bytes", 0))
+
+
 def bytes_cell(entry: dict | None) -> str:
     """Formats one engine's peak resident memory.
 
@@ -243,7 +298,18 @@ def render(document: dict, path: Path) -> str:
     lines.append(f"Versions: {versions}.")
     lines.append("")
 
-    if document.get("io") == "scan":
+    if suite == "ingestion":
+        lines.append(
+            "This suite measures the CSV reader itself, so the timed region is the "
+            "read and nothing else. The frame each engine returns is its own, not "
+            "an Arrow table: converting it would be a second and quite separate "
+            "piece of work, it is not the same size for every engine, and on the "
+            "wide file it cost Polars seventy times what the read did. The harness "
+            "converts afterwards, outside the timing, to check the four engines "
+            "read the same file."
+        )
+        lines.append("")
+    elif document.get("io") == "scan":
         lines.append(
             "In scan mode Polars and DuckDB read the Parquet inside the timed "
             "region and push the projection into the file, so they never touch "
@@ -259,6 +325,7 @@ def render(document: dict, path: Path) -> str:
 
     disagreed: list[str] = []
     missing: list[tuple[str, str, str]] = []
+    asides: list[tuple[str, str, str]] = []
     for query in query_registry.for_suite(suite):
         keys = {e: document["results"].get(f"{query.name}/{e}") for e in engines}
         if not any(keys.values()):
@@ -267,10 +334,54 @@ def render(document: dict, path: Path) -> str:
             disagreed.append(query.name)
             continue
         for engine, entry in keys.items():
-            if entry is not None and not entry.get("ok"):
+            if entry is None:
+                continue
+            if not entry.get("ok"):
                 missing.append((query.name, engine, entry.get("note", "")))
+            elif entry.get("note"):
+                asides.append((query.name, engine, entry["note"]))
         row = " | ".join(cell(keys[e]) for e in engines)
         lines.append(f"| {query.name} | {query.description} | {row} |")
+
+    if suite == "ingestion":
+        lines.append("")
+        lines.append(
+            "The same warm runs as megabytes of file per second, which is the "
+            "number that compares across the four files. They are deliberately "
+            "different shapes and the wide one has a tenth of the rows, so seconds "
+            "compare a reader against itself and bytes per second compare it "
+            "against the file."
+        )
+        lines.append("")
+        lines.append("| query | file | " + " | ".join(engines) + " |")
+        lines.append("| --- | ---: | " + " | ".join("---:" for _ in engines) + " |")
+        for query in query_registry.for_suite(suite):
+            keys = {e: document["results"].get(f"{query.name}/{e}") for e in engines}
+            if not any(keys.values()) or not comparable(document, query.name, engines):
+                continue
+            size = file_bytes(document, query)
+            row = " | ".join(rate_cell(keys[e], size) for e in engines)
+            lines.append(f"| {query.name} | {size / 1e6:,.0f} MB | {row} |")
+
+        lines.append("")
+        lines.append(
+            "The first run, taken after the file was dropped from the page cache, "
+            "and what it came to as a multiple of the warm median. This is the "
+            "number a reader gets on a file they have not touched before, which is "
+            "the usual case for a file being read once. That the eviction took is "
+            "checked rather than assumed: the block reads on the cold sample in "
+            "the result file come to the size of the file, and a machine where the "
+            "drop was refused says so against every measurement below."
+        )
+        lines.append("")
+        lines.append("| query | " + " | ".join(engines) + " |")
+        lines.append("| --- | " + " | ".join("---:" for _ in engines) + " |")
+        for query in query_registry.for_suite(suite):
+            keys = {e: document["results"].get(f"{query.name}/{e}") for e in engines}
+            if not any(keys.values()) or not comparable(document, query.name, engines):
+                continue
+            row = " | ".join(cold_cell(keys[e]) for e in engines)
+            lines.append(f"| {query.name} | {row} |")
 
     lines.append("")
     lines.append("Peak resident memory, which is the whole process and includes the data.")
@@ -357,6 +468,29 @@ def render(document: dict, path: Path) -> str:
         lines.append("| --- | --- | --- |")
         for query, engine, note in missing:
             lines.append(f"| {query} | {engine} | {note[:180]} |")
+
+    if asides:
+        lines.append("")
+        lines.append("### What the numbers above were taken under")
+        lines.append("")
+        lines.append(
+            "A measurement that needed a different configuration to happen at all "
+            "is still a measurement, but it is not the same one as its neighbours "
+            "in the row, so what changed is written down here rather than left in "
+            "the result file for nobody to find."
+        )
+        lines.append("")
+        # Grouped by the note rather than listed per measurement, because the one
+        # note every ingestion result carries is the page cache one and fifteen
+        # copies of it would bury the note that is actually about one engine.
+        grouped: dict[str, list[str]] = {}
+        for query, engine, note in asides:
+            grouped.setdefault(note, []).append(f"{query}/{engine}")
+        for note, where in grouped.items():
+            if len(where) == len(asides):
+                lines.append(f"- every measurement above: {note}")
+            else:
+                lines.append(f"- {', '.join(where)}: {note}")
 
     if disagreed:
         lines.append("")

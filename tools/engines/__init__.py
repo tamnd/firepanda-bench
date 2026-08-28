@@ -11,6 +11,12 @@ suite. Both are reported rather than hidden: a query an engine cannot run appear
 in the table with the reason it could not, which is the only way a reader can tell
 a hard query from a missing feature.
 
+The ingestion suite inverts the usual arrangement. Everywhere else `load` reads
+the data and the timed function runs a query over it; there the timed function is
+the read, so `load` does nothing but hand over the paths and the answer is the
+whole file. It runs in `scan` mode only, because a `memory` mode for a suite that
+measures the reader would mean reading the file before timing the read.
+
 An engine that is not a Python library sets `EXTERNAL = True` and provides
 `measure` instead of `load` and a query map. The firepanda engine is the only one
 of those today, because it is written in Mojo and runs as its own process.
@@ -57,6 +63,8 @@ def query_map(module, suite: str) -> dict:
     """
     if suite == "tpch":
         return getattr(module, "TPCH_QUERIES", {})
+    if suite == "ingestion":
+        return getattr(module, "INGESTION_QUERIES", {})
     return getattr(module, "QUERIES", {})
 
 
@@ -132,6 +140,53 @@ def digest(answer) -> tuple[int, int, str, dict[str, float], dict[str, int]]:
         sums,
         hashes,
     )
+
+
+def read_digest(answer) -> tuple[int, int, str, dict[str, float], dict[str, int]]:
+    """Reduces a whole file that was just read to something four engines can agree on.
+
+    `digest` is the wrong tool for the ingestion suite in one specific way. Its
+    text digest is a 64 bit FNV over every value, computed in Python, and over ten
+    million short strings that takes longer than every read in the suite put
+    together. It exists for group by answers, which have as many rows as there are
+    groups; an ingestion answer has as many rows as the file.
+
+    So text is reduced here to its total byte length and its null count instead of
+    to a hash. That is weaker, and the weakness is worth naming: it does not catch
+    two values swapped between rows, and it does not catch a reader that mangled a
+    value into a different one of the same length. What it does catch is the class
+    of mistake a CSV reader actually makes, which is losing a row, splitting a
+    quoted field at the delimiter inside it, dropping the escape from a doubled
+    quote, or reading an empty field as an empty string instead of a null. Every
+    one of those moves either the row count, the byte total or the null count.
+
+    Every column contributes a null count, including the numeric ones, because the
+    mostly-null file is nine tenths nulls and a reader that turned them into zeroes
+    would otherwise agree with one that did not on every column but the sum.
+
+    Args:
+        answer: The frame that was read, as a table or anything `as_arrow` takes.
+
+    Returns:
+        The row count, the column count, a hex digest and the per column numbers.
+        The text digest map is always empty, since text is folded into the
+        numbers here.
+    """
+    table = as_arrow(answer)
+    sums: dict[str, float] = {}
+    for name in sorted(table.column_names):
+        column = table.column(name)
+        sums[f"{name}.nulls"] = float(column.null_count)
+        if (
+            pa.types.is_string(column.type)
+            or pa.types.is_large_string(column.type)
+            or pa.types.is_binary(column.type)
+            or pa.types.is_large_binary(column.type)
+        ):
+            sums[f"{name}.bytes"] = float(pc.sum(pc.binary_length(column)).as_py() or 0)
+        else:
+            sums[f"{name}.sum"] = float(pc.sum(pc.cast(column, pa.float64())).as_py() or 0.0)
+    return table.num_rows, table.num_columns, fingerprint(table.num_rows, sums), sums, {}
 
 
 def column_sums(table: pa.Table) -> dict[str, float]:
