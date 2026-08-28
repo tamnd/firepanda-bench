@@ -28,6 +28,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import env_report
 import metrics
 import queries as query_registry
 
@@ -225,6 +226,33 @@ def machine_slug(machine: dict) -> str:
     return slug or "unknown-host"
 
 
+def describe_environment(path: Path | None) -> dict:
+    """Builds the environment block that goes into the result file.
+
+    The toolchain version and the firepanda commit used to be read from an
+    `env.json` and from nowhere else, so a run started with `pixi run bench`,
+    which is how every run outside CI is started, wrote an empty commit into the
+    result file. An empty commit makes a regression unattributable, and a file
+    left over from an older checkout is worse than empty because it attributes the
+    numbers to the wrong commit without saying so. The machine is probed here
+    instead, and a file is only consulted for the fields the probe left blank.
+
+    Args:
+        path: An `env.json` from env_report.py, or None.
+
+    Returns:
+        The record.
+    """
+    probed = env_report.describe()
+    if path is None or not path.exists():
+        return probed
+    stored = json.loads(path.read_text())
+    for key, value in stored.items():
+        if not probed.get(key):
+            probed[key] = value
+    return probed
+
+
 def main(argv: list[str] | None = None) -> int:
     """Runs the suite and writes the result file.
 
@@ -248,7 +276,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--runs", type=int, default=10)
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_S)
-    parser.add_argument("--env", type=Path, help="an env.json from env_report.py")
+    parser.add_argument(
+        "--env",
+        type=Path,
+        help="an env.json from env_report.py, consulted only for fields this run could not probe",
+    )
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
 
@@ -266,7 +298,7 @@ def main(argv: list[str] | None = None) -> int:
             f"no dataset at {manifest}. Run: pixi run data --suite {args.suite} --size {size}"
         )
 
-    environment = json.loads(args.env.read_text()) if args.env and args.env.exists() else {}
+    environment = describe_environment(args.env)
 
     print(
         f"{args.suite} at {size}, io {args.io}: {len(selected)} queries "

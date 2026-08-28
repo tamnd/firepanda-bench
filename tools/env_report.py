@@ -112,7 +112,7 @@ def mojo_version() -> str:
         import engines.firepanda_engine as firepanda_engine
 
         home = firepanda_engine.firepanda_home()
-    except Exception:
+    except (Exception, SystemExit):
         return ""
     try:
         completed = subprocess.run(
@@ -145,7 +145,10 @@ def engine_versions() -> dict[str, str]:
     for name in engine_registry.KNOWN:
         try:
             found[name] = engine_registry.load_engine(name).version()
-        except Exception:
+        # SystemExit and not Exception, because an engine reports a missing
+        # install by exiting, which reads fine from a command line and is fatal
+        # here. Describing a machine is allowed to come back with a blank.
+        except (Exception, SystemExit):
             found[name] = ""
     return found
 
@@ -169,7 +172,7 @@ def describe() -> dict:
         import engines.firepanda_engine as firepanda_engine
 
         record["firepanda_ref"] = firepanda_engine.git_ref()
-    except Exception:
+    except (Exception, SystemExit):
         record["firepanda_ref"] = ""
     return record
 

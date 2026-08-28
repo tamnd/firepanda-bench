@@ -4,6 +4,12 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### A result file names the build that produced it
+
+The commit and the toolchain were read out of an `env.json` and out of nothing else, and `pixi run bench` does not write one, so every file produced outside CI carried an empty `firepanda_ref`. Six did. Four others carried a commit from a checkout that had been replaced two releases earlier, which is worse, because it attributes the numbers to the wrong build and says so with the same confidence as a correct one. The run probes the machine it is running on, and an `env.json` is now only consulted for the fields the probe could not fill.
+
+`validate_results.py` rejects an empty `firepanda_ref` or `mojo_version` on any file where firepanda ran. It only asks when firepanda ran, because a pandas against Polars run on a machine with no Mojo installed owes neither field.
+
 ### firepanda runs thirteen of the fifteen db-benchmark queries
 
 q1, q2, q3, q7 and q10 were reported as unsupported because they group by a string column and firepanda could not hold one in a `DataFrame`. It can now, so the driver implements them and the five empty cells are filled with measurements. What is left is q8, which needs a top-k per group, and q9, which needs a correlation. Both say so in the table.
