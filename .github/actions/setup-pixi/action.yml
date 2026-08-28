@@ -17,14 +17,27 @@ inputs:
 runs:
   using: composite
   steps:
+    # Every input reaches the shell as an environment variable rather than as a
+    # template expansion inside the script. Expanded inline, a caller passing an
+    # environment name containing a shell metacharacter would be writing this
+    # action's script rather than choosing an argument to it.
     - name: Install pixi
       shell: bash
-      run: |
-        curl -fsSL https://pixi.sh/install.sh | PIXI_VERSION="${{ inputs.pixi-version }}" bash
-        echo "$HOME/.pixi/bin" >> "$GITHUB_PATH"
+      env:
+        PIXI_VERSION: ${{ inputs.pixi-version }}
+      run: curl -fsSL https://pixi.sh/install.sh | bash
+
+    # Separate from the install because a write to GITHUB_PATH is worth being able
+    # to read on its own. The audit flags any write to it, at low confidence,
+    # because a value derived from an input would let a caller put a directory of
+    # its choosing ahead of the real tools. The value here is a literal with no
+    # input in it, and the installer has to end up on PATH somehow.
+    - name: Put pixi on PATH
+      shell: bash
+      run: echo "$HOME/.pixi/bin" >> "$GITHUB_PATH" # zizmor: ignore[github-env]
 
     - name: Cache environment
-      uses: actions/cache@v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: |
           .pixi
@@ -35,13 +48,17 @@ runs:
 
     - name: Install environment
       shell: bash
-      run: pixi install --locked --environment "${{ inputs.environment }}"
+      env:
+        ENVIRONMENT: ${{ inputs.environment }}
+      run: pixi install --locked --environment "$ENVIRONMENT"
 
     # A benchmark that does not say which version of each engine it ran is not a
     # benchmark. Print them where every job's log can be read for them.
     - name: Record engine versions
       shell: bash
+      env:
+        ENVIRONMENT: ${{ inputs.environment }}
       run: |
-        pixi list --environment "${{ inputs.environment }}" \
+        pixi list --environment "$ENVIRONMENT" \
           | grep -Ei '^(pandas|polars|duckdb|pyarrow|cudf|modular|max|numpy|python) ' \
           | tee -a "$GITHUB_STEP_SUMMARY" || true
