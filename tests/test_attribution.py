@@ -32,6 +32,28 @@ def test_environment_is_probed_when_no_file_is_given():
     assert "engines" in described
 
 
+def test_a_machine_with_no_firepanda_checkout_can_still_be_described(monkeypatch):
+    """CI is that machine, and so is any box running two Python engines.
+
+    An engine reports a missing install by raising SystemExit, which reads fine
+    from a command line and is not caught by `except Exception`. Probing on the
+    common path made that reachable from `pixi run bench`, where before it only
+    ever ran under `env-report`.
+    """
+    import engines.firepanda_engine as firepanda_engine
+
+    def missing():
+        raise SystemExit("cannot find a firepanda checkout")
+
+    monkeypatch.delenv("FIREPANDA_REF", raising=False)
+    monkeypatch.setattr(firepanda_engine, "firepanda_home", missing)
+
+    described = run.describe_environment(None)
+
+    assert described["firepanda_ref"] == ""
+    assert described["engines"]["firepanda"] == ""
+
+
 def test_a_stored_field_does_not_override_a_probed_one(tmp_path, monkeypatch):
     """The stale file is the dangerous case, so the probe has to win."""
     monkeypatch.setattr(
