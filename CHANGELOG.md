@@ -4,6 +4,12 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### The firepanda driver is rebuilt when firepanda changes
+
+The driver was rebuilt when `engines/firepanda/main.mojo` was newer than the binary, and never mind the several hundred files of library it links. So a firepanda release that changed the CSV reader and not the driver left the old binary in place, and the harness went on publishing numbers for a version of firepanda that no longer existed. That is the worst way for a benchmark to be wrong: silently, and in whichever direction the last change happened to go.
+
+The staleness check now looks at every `.mojo` file under the firepanda checkout as well as at the driver. The size of what it was hiding, measured today on an i9-13900K at ten million rows with the two builds four releases apart: `csv_narrow` 0.176 s stale against 0.076 s current, `csv_wide` 0.172 against 0.116, `csv_quoted` 0.354 against 0.107, `csv_nulls` 0.179 against 0.107. Every published firepanda ingestion number since the suite landed should be read as belonging to whatever build was on the machine, not to the ref in the result file, and the fix is what makes that field mean what it says.
+
 ### The timed region stops paying for the previous run's teardown
 
 Every timed run in the harness was shaped `answer = run()`, and the rebinding is what releases the answer the run before it produced. That release happens inside the timed region, so run two was charged for freeing run one's result, run three for run two's, and so on. On the ingestion suite, where an answer is a whole ten million row frame, that is gigabytes of free attributed to the wrong thing. The previous answer is dropped before the clock starts now, in `metrics.measure` for the three Python engines and in the firepanda driver's loop for the same reason.

@@ -165,6 +165,30 @@ def git_ref() -> str:
     return completed.stdout.strip()
 
 
+def newest_source(home: Path) -> float:
+    """Returns the modification time of the newest source the driver links.
+
+    The driver is one file and the library it measures is several hundred, so
+    comparing the binary against the driver alone answers a question nobody
+    asked. A library change with no driver change left the old binary in place
+    and the harness went on reporting a version of firepanda that no longer
+    existed, which is the worst way for a benchmark to be wrong: silently, and
+    in whichever direction the last change went.
+
+    Args:
+        home: The firepanda checkout.
+
+    Returns:
+        The newest modification time in the driver source and the library.
+    """
+    newest = DRIVER_SOURCE.stat().st_mtime
+    for path in (home / "firepanda").rglob("*.mojo"):
+        stamp = path.stat().st_mtime
+        if stamp > newest:
+            newest = stamp
+    return newest
+
+
 def build(force: bool = False) -> Path:
     """Compiles the driver and returns the binary.
 
@@ -175,7 +199,8 @@ def build(force: bool = False) -> Path:
     measured.
 
     Args:
-        force: Whether to rebuild even if the binary is newer than the source.
+        force: Whether to rebuild even if the binary is newer than every source
+            it was built from.
 
     Returns:
         The binary path.
@@ -185,7 +210,7 @@ def build(force: bool = False) -> Path:
     """
     home = firepanda_home()
     binary = ROOT / "engines" / "firepanda" / "firepanda-driver"
-    if not force and binary.exists() and binary.stat().st_mtime > DRIVER_SOURCE.stat().st_mtime:
+    if not force and binary.exists() and binary.stat().st_mtime > newest_source(home):
         return binary
 
     command = [
