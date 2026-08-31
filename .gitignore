@@ -12,8 +12,9 @@ __pycache__/
 .pytest_cache/
 .DS_Store
 
-# The compiled Mojo driver, rebuilt whenever its source is newer than it is.
+# The compiled Mojo driver and the hash of the sources it was built from.
 engines/firepanda/firepanda-driver
+engines/firepanda/firepanda-driver.sources
 
 # Result files stay on the machine that produced them. CI uploads them as run
 # artifacts and draws the site from them, and nothing commits them back here.

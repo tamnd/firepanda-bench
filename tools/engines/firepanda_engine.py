@@ -36,6 +36,7 @@ to the query time.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -165,8 +166,8 @@ def git_ref() -> str:
     return completed.stdout.strip()
 
 
-def newest_source(home: Path) -> float:
-    """Returns the modification time of the newest source the driver links.
+def source_fingerprint(home: Path) -> str:
+    """Returns a content hash of every source the driver links.
 
     The driver is one file and the library it measures is several hundred, so
     comparing the binary against the driver alone answers a question nobody
@@ -175,18 +176,37 @@ def newest_source(home: Path) -> float:
     existed, which is the worst way for a benchmark to be wrong: silently, and
     in whichever direction the last change went.
 
+    This used to compare modification times, and that was wrong in a way that
+    cost a real measurement. The benchmark machines get the checkout as a
+    tarball, tar restores the modification times the files had in the checkout it
+    was made from, and a source edited last week therefore arrives looking older
+    than a binary built here yesterday. The harness then reused the binary and
+    reported the previous version of firepanda under the new commit's name. It is
+    the same failure the mtime check was written to prevent, arriving through the
+    one door the check did not cover, so the check now reads the bytes instead of
+    the clock.
+
+    What is deliberately not in the hash is the Mojo toolchain. A compiler
+    upgrade does not invalidate the binary here, and a stale binary across an
+    upgrade is a real hole, but the version is a subprocess away and this
+    function runs on every query. Rebuilding after a toolchain change is a
+    `--rebuild` away and the report records the toolchain, so the hole is at
+    least visible.
+
     Args:
         home: The firepanda checkout.
 
     Returns:
-        The newest modification time in the driver source and the library.
+        A hex digest over the driver source and the library, path names
+        included, so a rename with no edit still counts as a change.
     """
-    newest = DRIVER_SOURCE.stat().st_mtime
-    for path in (home / "firepanda").rglob("*.mojo"):
-        stamp = path.stat().st_mtime
-        if stamp > newest:
-            newest = stamp
-    return newest
+    digest = hashlib.sha256()
+    digest.update(DRIVER_SOURCE.read_bytes())
+    library = home / "firepanda"
+    for path in sorted(library.rglob("*.mojo")):
+        digest.update(str(path.relative_to(library)).encode())
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
 
 
 def build(force: bool = False) -> Path:
@@ -199,8 +219,8 @@ def build(force: bool = False) -> Path:
     measured.
 
     Args:
-        force: Whether to rebuild even if the binary is newer than every source
-            it was built from.
+        force: Whether to rebuild even if the sources are the ones the existing
+            binary was built from.
 
     Returns:
         The binary path.
@@ -210,8 +230,14 @@ def build(force: bool = False) -> Path:
     """
     home = firepanda_home()
     binary = ROOT / "engines" / "firepanda" / "firepanda-driver"
-    if not force and binary.exists() and binary.stat().st_mtime > newest_source(home):
-        return binary
+    stamp = binary.with_suffix(".sources")
+    fingerprint = source_fingerprint(home)
+    if not force and binary.exists() and stamp.exists():
+        try:
+            if stamp.read_text().strip() == fingerprint:
+                return binary
+        except OSError:
+            pass
 
     command = [
         "pixi",
@@ -230,6 +256,10 @@ def build(force: bool = False) -> Path:
     if completed.returncode != 0 or not binary.exists():
         tail = (completed.stderr or completed.stdout or "").strip().splitlines()[-6:]
         raise SystemExit("cannot build the firepanda driver: " + " | ".join(tail))
+    # After the build rather than before it, so a build that fails leaves no
+    # stamp and the next run tries again instead of trusting whatever binary an
+    # earlier commit left behind.
+    stamp.write_text(fingerprint + "\n")
     return binary
 
 
