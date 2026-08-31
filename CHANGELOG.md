@@ -4,6 +4,14 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### firepanda runs db-benchmark q9
+
+q9 is the squared correlation of v1 and v2 grouped by id2 and id4, and firepanda has been reporting it as unsupported since the suite landed because it had no aggregation that reads two columns at once. firepanda 0.6.24 added one, so the driver now runs it: group by the two keys with a correlation, square the result, and report the key columns and the square, which is what the other three engines report.
+
+That leaves q8 as the only query firepanda skips. It wants a top-k per group and there is still no kernel for it.
+
+Measured on an i9-13900K at ten million rows, seven runs, all four engines in the same invocation, with the cross engine fingerprints agreeing at ten thousand answer rows: pandas 1.445 s at 1.57 GB peak, Polars 0.197 s at 2.15 GB, DuckDB 0.022 s at 1.37 GB, firepanda 0.113 s at 1.10 GB. firepanda is 12.8 times pandas and 1.74 times Polars here, on the lowest peak memory of the four, and DuckDB is five times ahead of everyone.
+
 ### The firepanda driver is rebuilt when firepanda changes
 
 The driver was rebuilt when `engines/firepanda/main.mojo` was newer than the binary, and never mind the several hundred files of library it links. So a firepanda release that changed the CSV reader and not the driver left the old binary in place, and the harness went on publishing numbers for a version of firepanda that no longer existed. That is the worst way for a benchmark to be wrong: silently, and in whichever direction the last change happened to go.

@@ -15,9 +15,10 @@ ever drifts from the one in Python, the join queries fail that check on the firs
 run, because a join of two tables generated from different streams does not
 produce the same row count.
 
-Everything except q8 and q9 is here. q8 needs a top-k per group and q9 needs a
-correlation, and neither kernel exists. Those two are reported as unsupported,
-with the reason, rather than quietly dropped.
+Everything except q8 is here. q8 needs a top-k per group and that kernel does not
+exist, so it is reported as unsupported with the reason rather than quietly
+dropped. q9 joined the list with firepanda 0.6.24, which added a correlation that
+reads two columns at once.
 
 The string keyed queries, q1, q2, q3, q7 and q10, arrived with firepanda 0.6.6
 and 0.6.7, which put a string column in a `DataFrame` and let one be a group by
@@ -45,7 +46,7 @@ from firepanda.frame.groupby import AggSpec
 from firepanda.frame.series import Series
 from firepanda.io import ReadOptions, read_csv, read_csv_as
 from firepanda.join import JoinKind
-from firepanda.kernel import AggKind, subtract
+from firepanda.kernel import AggKind, multiply, subtract
 
 # 64 bit FNV-1a, which is what `tools/engines/__init__.py` hashes a text value
 # with. The two constants are the published ones and the null constant is the
@@ -341,6 +342,7 @@ def load(query: String, rows: Int) raises -> Tables:
         or query == "q5"
         or query == "q6"
         or query == "q7"
+        or query == "q9"
         or query == "q10"
     ):
         return Tables(groupby_frame(rows), DataFrame(), DataFrame())
@@ -449,6 +451,19 @@ def run_query(query: String, ref tables: Tables) raises -> DataFrame:
         )
         var wide = grouped.with_column(Series("range_v1_v2", span^))
         var wanted: List[String] = ["id3", "range_v1_v2"]
+        return wide.select(wanted^)
+
+    if query == "q9":
+        var by: List[String] = ["id2", "id4"]
+        var specs: List[AggSpec] = [AggSpec("v1", "v2", AggKind.CORR, "r")]
+        var grouped = tables.groupby.group_by(by^, specs^, True, False)
+        # The other three engines all report the square of the correlation, so
+        # the correlation itself is multiplied by itself here rather than being
+        # reported raw. Column 2 is the aggregate, after the two key columns.
+        var r = grouped[2].as_typed[DType.float64]()
+        var r2 = multiply(r, r)
+        var wide = grouped.with_column(Series("r2", r2^))
+        var wanted: List[String] = ["id2", "id4", "r2"]
         return wide.select(wanted^)
 
     if query == "q10":
