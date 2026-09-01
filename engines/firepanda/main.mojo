@@ -498,6 +498,11 @@ def reduce_join(var joined: DataFrame) raises -> DataFrame:
     which is what pandas, polars and DuckDB all do. That is the behaviour the
     fingerprint is checking, not an accident of this reduction.
 
+    This used to append a column of zeros and group by it, because a whole frame
+    reduction had no spelling. That put 81 ms of hashing into a 34 ms join and
+    made two thirds of every j number measure the harness. polars writes
+    `.select(pl.len(), sum, sum)` here, which is what `agg` now is.
+
     Args:
         joined: The join result.
 
@@ -509,14 +514,10 @@ def reduce_join(var joined: DataFrame) raises -> DataFrame:
         AggSpec("v1", AggKind.SUM, "v1"),
         AggSpec("v2", AggKind.SUM, "v2"),
     ]
-    # A constant key column, so the group by reduces the whole frame to one row.
-    var zeros = Array[DType.int32](height)
-    var whole = joined.with_column(Series("all", zeros^))
-    var out = whole.group_by(keys("all"), specs^, True, False)
-    var counts = Array[DType.int64](len(out))
-    for i in range(len(out)):
-        counts[i] = Int64(height)
-    return out.with_column(Series("rows", counts^)).drop(keys("all"))
+    var out = joined.agg(specs^)
+    var counts = Array[DType.int64](1)
+    counts[0] = Int64(height)
+    return out.with_column(Series("rows", counts^))
 
 
 def narrow_schema() raises -> Schema:
