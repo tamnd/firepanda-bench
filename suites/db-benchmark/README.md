@@ -40,9 +40,9 @@ q8 wants a top-k per group and that kernel does not exist. The report lists it w
 
 ## One thing about firepanda that has to be said out loud
 
-firepanda has no Parquet reader, so its driver does not read the dataset. It regenerates it, from the same splitmix64 counter stream the generator used, before the timer starts.
+firepanda's driver does not read the dataset. It regenerates it, from the same splitmix64 counter stream the generator used, before the timer starts. The reason is not that it cannot open a Parquet file, because it can, but that the way it opens one is to hand it to DuckDB and take the vectors back as Arrow, and DuckDB is one of the four engines in this table.
 
-That is a claim, not a fact, and the cross-engine fingerprint is what makes it checkable. Every engine's answer is reduced to a row count, per-column sums and per-column text digests keyed by column name, and if firepanda's regenerated table differed from the Parquet one by a single row the fingerprints would part company and the report would name the query. This arrangement goes away the moment there is a Parquet reader.
+That is a claim, not a fact, and the cross-engine fingerprint is what makes it checkable. Every engine's answer is reduced to a row count, per-column sums and per-column text digests keyed by column name, and if firepanda's regenerated table differed from the Parquet one by a single row the fingerprints would part company and the report would name the query. This arrangement goes away the moment firepanda decodes Parquet itself.
 
 ## Reported alongside every timing
 

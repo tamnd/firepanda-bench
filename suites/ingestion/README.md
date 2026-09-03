@@ -13,7 +13,7 @@ python tools/run.py --suite ingestion --size 10M --engines all --runs 7
 
 `read_csv` is the first line of code almost every user writes. First impressions are made here, before anyone has run a single aggregation, and a library that is fast at group by and slow to load a file will be judged on the second thing.
 
-It is also the only suite where firepanda is handed the same file as everybody else. db-benchmark and TPC-H are Parquet, firepanda has no Parquet reader, and for db-benchmark it regenerates the data from the same seed instead. Here there is nothing to regenerate and nothing to take on trust: four engines open one file and the harness checks they got the same rows out of it.
+It is also the only suite where firepanda is handed the same file as everybody else. db-benchmark and TPC-H are Parquet, firepanda reads Parquet by handing the file to DuckDB, which is not something to time against DuckDB, and for db-benchmark it regenerates the data from the same seed instead. Here there is nothing to regenerate and nothing to take on trust: four engines open one file and the harness checks they got the same rows out of it.
 
 ## What is in the four files
 

@@ -67,7 +67,7 @@ def test_a_crashing_engine_is_flagged():
 
 
 def test_a_stated_reason_is_not_a_crash():
-    """ "firepanda has no Parquet reader" is a fact about the engine, not a bug."""
+    """ "firepanda has no top-k per group" is a fact about the engine, not a bug."""
     document = _document(
         {
             "q1/firepanda": {"ok": False, "note": "groups by a string column"},

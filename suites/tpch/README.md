@@ -22,7 +22,7 @@ Two things that check turned up, kept here because they will come back:
 
 ## Which engines run it
 
-pandas, Polars and DuckDB run all 22. firepanda runs none of them, because it has no Parquet reader and no ordering comparison on strings, and the report says so on every row rather than leaving the column out.
+pandas, Polars and DuckDB run all 22. firepanda runs none of them, and the report says so on every row rather than leaving the column out. Three things are missing: the twenty two queries in its driver, an ordering comparison on strings, and a way to load the dbgen output. The third is the awkward one. firepanda can open a Parquet file, but it does so by handing it to DuckDB, and this suite's data cannot be regenerated from a seed the way db-benchmark's can, so there is no load path here that does not run through an engine in the table.
 
 pandas gets one concession that is worth stating plainly. Arrow-backed pandas cannot do the decimal arithmetic Q1 needs, because the intermediate wants precision 61 and Arrow's limit is 38, and there is no way to ask for a narrower one. Decimal columns are cast to double at load. Double arithmetic is faster than exact decimal arithmetic, so the bias runs in pandas' favour.
 
