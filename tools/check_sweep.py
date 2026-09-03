@@ -24,7 +24,7 @@ row.
 
 A competitor that crashed. A pairing that failed is recorded with the reason
 rather than dropped, which is right, but "DuckDB raised a parser error" and
-"firepanda has no Parquet reader" read the same in a table and only one of them
+"firepanda has no top-k per group" read the same in a table and only one of them
 is a fact about the engine. Every join in this suite failed on DuckDB for a week
 because the tables are called `left` and `right_small` and LEFT is a reserved
 word, and the report said so on five rows that nobody read. A crash is now loud.

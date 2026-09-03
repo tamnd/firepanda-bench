@@ -4,6 +4,16 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### The Parquet claim is corrected everywhere it appears
+
+Nine places in this repository said firepanda has no Parquet reader. That stopped being true a while ago and nobody came back to fix the prose, which is exactly the kind of rot a benchmark cannot afford, because the sentences explaining why a comparison is arranged the way it is are the ones a sceptical reader checks first.
+
+What is true is narrower and more interesting. firepanda can open a Parquet file. The way it does it is to hand the file to DuckDB and read DuckDB's vectors back as Arrow. That is a sensible thing for a dataframe library to do, and it is not a thing that can go on a timer in a table where DuckDB is one of the four engines, because the number that came out would be DuckDB's decoder wearing firepanda's name.
+
+So nothing about how the suites run changes. db-benchmark still regenerates its data from the seed rather than reading the Parquet file, and TPC-H is still twenty two refusals in firepanda's column. What changes is the stated reason, from a capability firepanda lacks to a conflict of interest it has, and for TPC-H the list of what is actually missing, which is the twenty two queries in the driver, an ordering comparison on strings, and a load path that does not run through an engine in the table.
+
+The coverage line was stale in the other direction too. It said firepanda runs 13 of 15 db-benchmark queries and named q9 as one of the misses, which the previous entry in this file had already fixed. It is 14 of 15 and the only miss is q8.
+
 ### firepanda runs db-benchmark q9
 
 q9 is the squared correlation of v1 and v2 grouped by id2 and id4, and firepanda has been reporting it as unsupported since the suite landed because it had no aggregation that reads two columns at once. firepanda 0.6.24 added one, so the driver now runs it: group by the two keys with a correlation, square the result, and report the key columns and the square, which is what the other three engines report.

@@ -10,12 +10,16 @@ is built from.
 There is a fairness problem here and it is worth stating plainly rather than
 burying it in a footnote.
 
-firepanda has no Parquet reader. It has a CSV reader, and Parquet is what the
-other three engines are handed for db-benchmark and TPC-H, so for those two suites
-it cannot be handed the same file. What the driver does instead is generate the
-same data, using the same splitmix64 stream in the same counter form as
-`tools/data.py`, and the fingerprint check is what makes that claim testable
-rather than asserted.
+firepanda has no Parquet decoder of its own. It can open a Parquet file, and the
+way it does that is to hand the file to DuckDB and read DuckDB's vectors back as
+Arrow. That is a sensible thing for a dataframe library to do and it is not a
+thing that can be put on a timer in a table where DuckDB is one of the four
+engines, because the number that came out would be DuckDB's reader wearing
+firepanda's name. Parquet is what the other three engines are handed for
+db-benchmark and TPC-H, so for those two suites firepanda cannot be handed the
+same file. What the driver does instead is generate the same data, using the same
+splitmix64 stream in the same counter form as `tools/data.py`, and the fingerprint
+check is what makes that claim testable rather than asserted.
 
 The ingestion suite is the exception and it is the honest one. That suite's data
 is CSV, firepanda opens the same file as everybody else, and nothing about the
@@ -23,10 +27,11 @@ comparison depends on two generators agreeing.
 
 That works for db-benchmark, whose data is generated. It does not work for TPC-H,
 whose data comes from dbgen, and no amount of cleverness makes it work: there is
-no way to run a TPC-H query against a table you cannot read. firepanda is
-therefore reported as unable to run TPC-H, with that reason, until it has a
-reader. It is not omitted from the table, because a table that silently contains
-only the suites we do well on is an advertisement.
+no seed to reproduce and the only reader firepanda has for the file goes through
+an engine in the table. firepanda is therefore reported as unable to run TPC-H,
+with that reason, until it decodes Parquet itself. It is not omitted from the
+table, because a table that silently contains only the suites we do well on is an
+advertisement.
 
 The generated path is also not free of doubt even where it applies. Generating a
 column is not the same as reading one, so firepanda's load time is not comparable
@@ -296,9 +301,10 @@ def measure(
         return {
             "ok": False,
             "note": (
-                f"firepanda cannot run {suite}: it has no Parquet reader, and "
-                "unlike db-benchmark this suite's data cannot be regenerated "
-                "from a seed"
+                f"firepanda cannot run {suite}: it decodes Parquet only by "
+                "handing the file to DuckDB, which is an engine in this table, "
+                "and unlike db-benchmark this suite's data cannot be "
+                "regenerated from a seed"
             ),
         }
     elif query not in SUPPORTED:
