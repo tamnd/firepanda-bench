@@ -15,10 +15,9 @@ ever drifts from the one in Python, the join queries fail that check on the firs
 run, because a join of two tables generated from different streams does not
 produce the same row count.
 
-Everything except q8 is here. q8 needs a top-k per group and that kernel does not
-exist, so it is reported as unsupported with the reason rather than quietly
-dropped. q9 joined the list with firepanda 0.6.24, which added a correlation that
-reads two columns at once.
+All fifteen queries are here. q9 joined the list with firepanda 0.6.24, which
+added a correlation that reads two columns at once, and q8 was the last one to
+arrive, with the per group top-n kernel.
 
 The string keyed queries, q1, q2, q3, q7 and q10, arrived with firepanda 0.6.6
 and 0.6.7, which put a string column in a `DataFrame` and let one be a group by
@@ -342,6 +341,7 @@ def load(query: String, rows: Int) raises -> Tables:
         or query == "q5"
         or query == "q6"
         or query == "q7"
+        or query == "q8"
         or query == "q9"
         or query == "q10"
     ):
@@ -451,6 +451,20 @@ def run_query(query: String, ref tables: Tables) raises -> DataFrame:
         )
         var wide = grouped.with_column(Series("range_v1_v2", span^))
         var wanted: List[String] = ["id3", "range_v1_v2"]
+        return wide.select(wanted^)
+
+    if query == "q8":
+        # Two rows per id6, largest v3 first. The other three engines all keep
+        # the row and not just the value, so the answer is the pair of columns
+        # and not a list column that then has to be flattened.
+        #
+        # The narrowing happens after the gather and not before it, which is
+        # worth half the query. `select` copies the columns it keeps, so doing
+        # it first copies twenty million values to answer a question about two
+        # hundred thousand, while doing it second copies two hundred thousand.
+        # Measured at 75 ms the first way and 39 ms the second, same answer.
+        var wanted: List[String] = ["id6", "v3"]
+        var wide = tables.groupby.group_nlargest(keys("id6"), "v3", 2)
         return wide.select(wanted^)
 
     if query == "q9":

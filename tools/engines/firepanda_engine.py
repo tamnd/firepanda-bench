@@ -63,8 +63,8 @@ DRIVER_SOURCE = ROOT / "engines" / "firepanda" / "main.mojo"
 #
 # The five string keyed group by queries moved in here when firepanda learned to
 # put a string column in a `DataFrame`, group by one and aggregate one. q9 moved
-# in with 0.6.24, which added a correlation that reads two columns at once. What
-# is left is the one query that needs a kernel nobody has written.
+# in with 0.6.24, which added a correlation that reads two columns at once, and
+# q8 with the per group top-n kernel. All fifteen run.
 SUPPORTED = (
     "q1",
     "q2",
@@ -73,6 +73,7 @@ SUPPORTED = (
     "q5",
     "q6",
     "q7",
+    "q8",
     "q9",
     "q10",
     "j1",
@@ -82,9 +83,7 @@ SUPPORTED = (
     "j5",
 )
 
-UNSUPPORTED = {
-    "q8": "needs a top-k per group, which is not a kernel that exists",
-}
+UNSUPPORTED: dict[str, str] = {}
 
 # The ingestion suite, all of which the CSV reader handles.
 INGESTION_SUPPORTED = (

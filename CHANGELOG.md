@@ -4,6 +4,14 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### q8 is answered, and the driver narrows after the gather rather than before it
+
+q8 asks for the two largest v3 in each id6 and it was the one db-benchmark query firepanda skipped, because it needed a top-k per group and no such kernel existed. firepanda has one now, so the query is written and the engine's unsupported list is empty. All four engines run all fifteen.
+
+The way the query is written matters more than usual here. The obvious order is to narrow to the two columns the query reads and then take the rows, which is what pandas does and what the first version of this driver did. But `select` copies the columns it keeps, so narrowing first copies twenty million values in order to answer a question about two hundred thousand. Narrowing second copies two hundred thousand. On the i9-13900K at 0.5GB that is 75 ms the first way and 37 ms the second, for the same answer, and the answer's checksum is the same one pandas, Polars and DuckDB produce.
+
+The measured row, ten runs, memory mode, quiet machine, repeated twice with the same result: firepanda 0.037 s, DuckDB 0.071 s, Polars 0.205 s, pandas 2.759 s. Peak resident set is 0.95 GB for firepanda against 2.59 for DuckDB, 1.34 for Polars and 1.65 for pandas.
+
 ### The Parquet claim is corrected everywhere it appears
 
 Nine places in this repository said firepanda has no Parquet reader. That stopped being true a while ago and nobody came back to fix the prose, which is exactly the kind of rot a benchmark cannot afford, because the sentences explaining why a comparison is arranged the way it is are the ones a sceptical reader checks first.

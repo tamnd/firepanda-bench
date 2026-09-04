@@ -59,7 +59,7 @@ Three places where the comparison is not perfectly even, stated here rather than
 
 **pandas gets float64 money columns in TPC-H.** Arrow-backed pandas cannot do the decimal arithmetic that Q1 needs, because the intermediate wants precision 61 and Arrow's limit is 38, and there is no way to ask for a narrower one. So decimal columns are cast to double at load. That is faster than exact decimal arithmetic would be, so the bias runs in pandas' favour.
 
-**firepanda runs 14 of 15 db-benchmark queries, 0 of 22 TPC-H queries and 5 of 5 ingestion queries.** The one it misses is q8, which needs a top-k per group. TPC-H needs the twenty two queries written in the driver and an ordering comparison on strings, and it needs a way to load the dbgen output that does not go through DuckDB. The report lists each one with the reason.
+**firepanda runs 15 of 15 db-benchmark queries, 0 of 22 TPC-H queries and 5 of 5 ingestion queries.** q8 was the last db-benchmark gap and it closed when firepanda gained a per group top-n kernel. TPC-H needs the twenty two queries written in the driver and an ordering comparison on strings, and it needs a way to load the dbgen output that does not go through DuckDB. The report lists each one with the reason.
 
 ## Two methodology notes that decide whether the numbers mean anything
 

@@ -34,9 +34,7 @@ The high-cardinality queries are the ones to watch. They are where MojoFrame's a
 
 ## Which engines run it
 
-pandas, Polars and DuckDB run all 15. firepanda runs 14, everything except q8.
-
-q8 wants a top-k per group and that kernel does not exist. The report lists it with its own reason rather than leaving the row out.
+All four engines run all 15. q8 was the last gap, and it closed when firepanda gained a per group top-n kernel.
 
 ## One thing about firepanda that has to be said out loud
 
