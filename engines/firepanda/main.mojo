@@ -492,52 +492,65 @@ def run_query(query: String, ref tables: Tables) raises -> DataFrame:
         return tables.groupby.group_by(by^, specs^, True, False)
 
     if query == "j1":
-        return reduce_join(narrow(tables.left, "id1").join(tables.right, keys("id1"), JoinKind.INNER))
+        var out = tables.left.join(
+            tables.right, keys("id1"), JoinKind.INNER, "_right", join_output()
+        )
+        return reduce_join(out^)
     if query == "j2":
-        return reduce_join(narrow(tables.left, "id2").join(tables.right, keys("id2"), JoinKind.INNER))
+        var out = tables.left.join(
+            tables.right, keys("id2"), JoinKind.INNER, "_right", join_output()
+        )
+        return reduce_join(out^)
     if query == "j3":
-        return reduce_join(narrow(tables.left, "id2").join(tables.right, keys("id2"), JoinKind.LEFT))
+        var out = tables.left.join(
+            tables.right, keys("id2"), JoinKind.LEFT, "_right", join_output()
+        )
+        return reduce_join(out^)
     if query == "j4":
-        return reduce_join(narrow(tables.left, "id3").join(tables.right, keys("id3"), JoinKind.INNER))
+        var out = tables.left.join(
+            tables.right, keys("id3"), JoinKind.INNER, "_right", join_output()
+        )
+        return reduce_join(out^)
     if query == "j5":
-        return reduce_join(narrow(tables.left, "id3").join(tables.right, keys("id3"), JoinKind.LEFT))
+        var out = tables.left.join(
+            tables.right, keys("id3"), JoinKind.LEFT, "_right", join_output()
+        )
+        return reduce_join(out^)
 
     raise Error(String("firepanda does not run ", query))
 
 
-def narrow(frame: DataFrame, key: String) raises -> DataFrame:
-    """Drops the left table columns the join query never reads.
+def join_output() -> List[String]:
+    """Names the join output columns the five join queries actually read.
 
-    The left table has four columns and every join query reads two of them, the
-    key and v1. Handing all four to the join means gathering two columns of ten
-    million rows through the join for a reduction that never looks at them.
+    The left table has four columns and the right has two, so a join that keeps
+    everything builds five columns of ten million rows. The reduction after it
+    reads two, v1 and v2, and the other three are gathered through the join for
+    nobody.
 
-    Polars and DuckDB both remove those columns without being asked, because
-    both are given the query as a plan and both push the projection down into
-    it. firepanda has no optimizer until M4, so if the driver does not do it by
-    hand then firepanda is the only engine of the four executing that work, and
-    the number would be measuring a missing optimizer rather than a join. Doing
-    it by hand is worth between 1.4x and 1.9x depending on the query.
+    Polars and DuckDB both drop them without being asked, because both are given
+    the query as a plan and both push the projection down into it. firepanda has
+    no optimizer until M4, so if the driver does not say which columns it wants
+    then firepanda is the only engine of the four executing that work, and the
+    number would be measuring a missing optimizer rather than a join.
 
     pandas is left as it is, because pandas has no optimizer either and carrying
     the columns is what pandas actually does with this query. So the pandas
     column of the join rows includes a cost the other three avoid, and that is a
     real difference between the engines rather than a handicap applied here.
 
-    firepanda pays for this in a way the other two do not: `select` copies the
-    columns it keeps, so the narrowing is a copy of two columns rather than a
-    change of plan. It still wins by a wide margin, which says something about
-    what the gather through a join costs.
-
-    Args:
-        frame: The left table.
-        key: The join key column.
+    This used to be a `select` on the left table before the join, which worked
+    but cost a copy of two columns of ten million rows to avoid gathering three.
+    `join` takes the projection directly now, so the columns nobody reads are
+    never built and nothing is copied to arrange that.
 
     Returns:
-        A frame of the key and v1.
+        The two column names, in output order.
     """
-    var wanted: List[String] = [key, "v1"]
-    return frame.select(wanted^)
+    var out = List[String]()
+    out.append("v1")
+    out.append("v2")
+    return out^
 
 
 def reduce_join(var joined: DataFrame) raises -> DataFrame:
