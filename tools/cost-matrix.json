@@ -1,8 +1,18 @@
 {
-  "chained": 20,
-  "count": 53,
+  "chained": 21,
+  "count": 65,
   "generator": "fpcompat.budget",
   "operations": {
+    "assign two columns": {
+      "chained": false,
+      "covers": [
+        "DataFrame.assign"
+      ],
+      "needs": [
+        "numeric"
+      ],
+      "section": "basics"
+    },
     "astype int64 to int32": {
       "chained": false,
       "covers": [
@@ -165,6 +175,18 @@
       ],
       "section": "temporal"
     },
+    "filter then groupby.median": {
+      "chained": true,
+      "covers": [
+        "DataFrame.loc",
+        "DataFrame.groupby",
+        "GroupBy.median"
+      ],
+      "needs": [
+        "keyed"
+      ],
+      "section": "groupby"
+    },
     "filter then groupby.sum": {
       "chained": true,
       "covers": [
@@ -246,6 +268,26 @@
       ],
       "section": "groupby"
     },
+    "groupby.count": {
+      "chained": false,
+      "covers": [
+        "GroupBy.count"
+      ],
+      "needs": [
+        "keyed"
+      ],
+      "section": "groupby"
+    },
+    "groupby.head 2 per group": {
+      "chained": false,
+      "covers": [
+        "GroupBy.head"
+      ],
+      "needs": [
+        "keyed"
+      ],
+      "section": "groupby"
+    },
     "groupby.mean string key": {
       "chained": false,
       "covers": [
@@ -257,10 +299,41 @@
       ],
       "section": "groupby"
     },
+    "groupby.median": {
+      "chained": false,
+      "covers": [
+        "DataFrame.groupby",
+        "GroupBy.median"
+      ],
+      "needs": [
+        "keyed"
+      ],
+      "section": "groupby"
+    },
+    "groupby.min": {
+      "chained": false,
+      "covers": [
+        "GroupBy.min"
+      ],
+      "needs": [
+        "keyed"
+      ],
+      "section": "groupby"
+    },
     "groupby.nunique high cardinality": {
       "chained": false,
       "covers": [
         "GroupBy.nunique"
+      ],
+      "needs": [
+        "keyed"
+      ],
+      "section": "groupby"
+    },
+    "groupby.std": {
+      "chained": false,
+      "covers": [
+        "GroupBy.std"
       ],
       "needs": [
         "keyed"
@@ -299,6 +372,26 @@
         "keyed"
       ],
       "section": "basics"
+    },
+    "map through a dict": {
+      "chained": false,
+      "covers": [
+        "Series.map"
+      ],
+      "needs": [
+        "keyed"
+      ],
+      "section": "basics"
+    },
+    "mean": {
+      "chained": false,
+      "covers": [
+        "Series.mean"
+      ],
+      "needs": [
+        "numeric"
+      ],
+      "section": "stats"
     },
     "merge on int64 key": {
       "chained": false,
@@ -476,6 +569,16 @@
       ],
       "section": "strings"
     },
+    "str.endswith": {
+      "chained": false,
+      "covers": [
+        "str.endswith"
+      ],
+      "needs": [
+        "strings"
+      ],
+      "section": "strings"
+    },
     "str.len": {
       "chained": false,
       "covers": [
@@ -508,11 +611,31 @@
       ],
       "section": "strings"
     },
+    "str.slice": {
+      "chained": false,
+      "covers": [
+        "str.slice"
+      ],
+      "needs": [
+        "strings"
+      ],
+      "section": "strings"
+    },
     "str.split then get": {
       "chained": false,
       "covers": [
         "str.split",
         "str.get"
+      ],
+      "needs": [
+        "strings"
+      ],
+      "section": "strings"
+    },
+    "str.startswith": {
+      "chained": false,
+      "covers": [
+        "str.startswith"
       ],
       "needs": [
         "strings"

@@ -367,10 +367,18 @@ def report() -> str:
     if gaps["missing"]:
         lines.append(", ".join(gaps["missing"]))
         lines.append("")
-        lines.append(
-            "Each of those is a pandas operation a published benchmark query runs and "
-            "the cost matrix has no row for. They are the rows the matrix should grow next."
-        )
+        if set(gaps["missing"]) == {"pandas.read_csv"}:
+            lines.append(
+                "That one is a deliberate exclusion rather than a hole. Reading a CSV is "
+                "what the ingestion suite above measures, on five file shapes against four "
+                "engines, and the compat corpus is Arrow on disk rather than text, so a row "
+                "over there would be a worse version of a table that already exists."
+            )
+        else:
+            lines.append(
+                "Each of those is a pandas operation a published benchmark query runs and "
+                "the cost matrix has no row for. They are the rows the matrix should grow next."
+            )
     else:
         lines.append("Nothing. Every operation the 37 queries touch has a row.")
     return "\n".join(lines) + "\n"
