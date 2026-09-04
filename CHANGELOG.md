@@ -4,6 +4,16 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### The join queries stop carrying columns nothing reads
+
+The left join table has four columns and every join query reads two of them, the key and v1. The driver was handing all four to the join, which gathers two columns of ten million rows through the join for a reduction that never looks at them.
+
+Polars and DuckDB both drop those columns without being asked, because both are handed the query as a plan and both push the projection down into it. firepanda has no optimizer until M4, so leaving it in meant firepanda was the only engine of the four executing that work, and the number was measuring a missing optimizer rather than a join. The driver now does it by hand and says so.
+
+pandas is deliberately left alone, because pandas has no optimizer either and carrying the columns is what pandas genuinely does with this query. The pandas column of the join rows therefore includes a cost the other three avoid, which is a difference between the engines and not a handicap applied here.
+
+On the i9-13900K at 0.5GB, ten runs, memory mode, quiet machine, firepanda's join medians go from 0.052, 0.055, 0.048, 0.134 and 0.075 seconds to 0.035, 0.035, 0.034, 0.069 and 0.072. All five answers agree with all three other engines.
+
 ### q8 is answered, and the driver narrows after the gather rather than before it
 
 q8 asks for the two largest v3 in each id6 and it was the one db-benchmark query firepanda skipped, because it needed a top-k per group and no such kernel existed. firepanda has one now, so the query is written and the engine's unsupported list is empty. All four engines run all fifteen.
