@@ -120,6 +120,49 @@ def test_a_run_without_firepanda_owes_no_toolchain(tmp_path):
     assert validate_results.check(path) == []
 
 
+def test_a_result_that_ran_and_reports_no_peak_memory_is_rejected(tmp_path):
+    """The shape of a file the firepanda driver used to write on a Mac.
+
+    It read peak memory out of `/proc`, found no `/proc`, reported zero and said
+    `ok`, so the subject engine's whole memory column was zeros that read as
+    measurements. A process that ran has a non zero high water mark, so there is
+    no query for which this is the truth.
+    """
+    path = tmp_path / "r.json"
+    path.write_text(
+        json.dumps(
+            document(
+                results={
+                    "q1/firepanda": {
+                        "median_s": 0.01,
+                        "iqr_s": 0.0,
+                        "peak_rss_bytes": 0,
+                        "cache": "warm",
+                        "ok": True,
+                    }
+                }
+            )
+        )
+    )
+
+    problems = validate_results.check(path)
+
+    assert any("peak memory" in problem for problem in problems)
+
+
+def test_a_pairing_that_did_not_run_owes_no_peak_memory(tmp_path):
+    # A refusal is allowed to carry nothing but a reason, which is the whole
+    # point of publishing refusals rather than dropping the row.
+    path = tmp_path / "r.json"
+    path.write_text(
+        json.dumps(
+            document(results={"q1/firepanda": {"ok": False, "note": "no window functions yet"}})
+        )
+    )
+
+    assert validate_results.check(path) == []
+
+
 def test_a_file_with_no_exact_check_in_it_is_still_a_result(tmp_path):
     # The exact check is off by default, so most files will never carry one.
     path = tmp_path / "r.json"

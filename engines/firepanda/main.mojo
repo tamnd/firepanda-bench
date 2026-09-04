@@ -33,7 +33,9 @@ Usage:
 """
 
 from std.collections.span import Span
+from std.ffi import external_call
 from std.sys import argv
+from std.sys.info import CompilationTarget
 from std.time import perf_counter_ns
 
 from firepanda.array.any import AnyArray
@@ -724,39 +726,81 @@ def column_hash(ref column: AnyArray) raises -> UInt64:
     return total
 
 
-def read_cpu_ticks() -> List[Int]:
-    """Reads this process's user and system CPU time from `/proc/self/stat`.
+struct Usage(Copyable, Movable):
+    """What `getrusage` says about this process."""
 
-    The two fields are the fourteenth and fifteenth, counted from one, and they
-    are in clock ticks rather than seconds. The tick is USER_HZ, which is a
-    hundred on every Linux the kernel ships as a supported configuration, so a
-    tick is ten milliseconds. That is far too coarse to time one run of a query
-    that takes twenty milliseconds, which is why the harness only ever reads
-    these once before the first run and once after the last, and reports CPU for
-    the timed region as a whole. Ten runs of twenty milliseconds is two hundred
-    milliseconds, and ten milliseconds of quantization on that is a few percent.
+    var user_us: Int
+    """User CPU time in microseconds."""
 
-    The name of the executable is the second field and it is wrapped in
-    parentheses and may itself contain spaces, which is why this finds the last
-    closing parenthesis and counts from there rather than splitting the line.
+    var system_us: Int
+    """System CPU time in microseconds."""
+
+    var peak_rss_bytes: Int
+    """The high water mark of resident memory, which never falls."""
+
+    var voluntary_switches: Int
+    """Context switches this process asked for, which is mostly waiting."""
+
+    var involuntary_switches: Int
+    """Context switches the scheduler imposed, which is mostly contention."""
+
+    def __init__(out self):
+        """Constructs an all-zero usage, for a kernel that reports none."""
+        self.user_us = 0
+        self.system_us = 0
+        self.peak_rss_bytes = 0
+        self.voluntary_switches = 0
+        self.involuntary_switches = 0
+
+
+def read_usage() -> Usage:
+    """Reads this process's CPU time, peak memory and context switches.
+
+    This used to read `/proc/self/stat` and `/proc/self/status`, which meant
+    that on anything without a `/proc` the driver reported zero for every
+    resource number and said nothing about it. The published Linux results were
+    fine and a run on a Mac produced a result file where firepanda's peak
+    resident set was `0` and `ok` was `true`, which is a zero that reads as a
+    measurement. Half of what this project claims is memory, so a subject engine
+    that silently reports none of it is worse than one that fails.
+
+    `getrusage` is in libc on both platforms and reports the same quantities, so
+    there is one code path now instead of a Linux one and a hole. It is also
+    better on Linux than what it replaces: `/proc/self/stat` reports CPU in
+    USER_HZ ticks, which is ten milliseconds, and this is in microseconds, so
+    the caveat about quantizing a two hundred millisecond timed region at ten
+    milliseconds is gone.
+
+    The struct is read by byte offset rather than through a declared layout,
+    because Mojo has no `struct rusage` and writing one down per platform is the
+    same offsets with more places to get them wrong. `ru_utime` and `ru_stime`
+    are two `timeval` at 0 and 16, `ru_maxrss` is a `long` at 32, and `ru_nvcsw`
+    and `ru_nivcsw` are `long` at 128 and 136, on Linux and on macOS alike. The
+    one place the two differ is inside `timeval`: `tv_usec` is a 64 bit
+    `suseconds_t` on Linux and a 32 bit one on macOS with four bytes of padding
+    after it, and the padding is not documented to be zero, so the microseconds
+    are read at their own width rather than as a wide load that happens to work.
+    The other difference is the unit of `ru_maxrss`, which is kilobytes on Linux
+    and bytes on macOS.
 
     Returns:
-        The user and system times in ticks, or two zeros if `/proc` is absent.
+        The usage, or all zeros if the call failed.
     """
-    var out: List[Int] = [0, 0]
-    try:
-        with open("/proc/self/stat", "r") as handle:
-            var text = handle.read()
-            var close = text.rfind(")")
-            if close < 0:
-                return out^
-            # Field 3 onwards, so field 14 is index 11 and field 15 is index 12.
-            var fields = String(text[byte = close + 1 :]).split()
-            if len(fields) > 12:
-                out[0] = Int(String(fields[11]))
-                out[1] = Int(String(fields[12]))
-    except:
-        pass
+    var buf = InlineArray[Int64, 32](fill=0)
+    # RUSAGE_SELF is zero on both platforms.
+    var rc = external_call["getrusage", Int32](Int32(0), buf.unsafe_ptr())
+    var out = Usage()
+    if rc != 0:
+        return out^
+    comptime mac = CompilationTarget.is_macos()
+    var narrow = buf.unsafe_ptr().unsafe_bitcast[Int32]()
+    var user_us = Int(narrow[unsafe_offset=2]) if mac else Int(buf[1])
+    var system_us = Int(narrow[unsafe_offset=6]) if mac else Int(buf[3])
+    out.user_us = Int(buf[0]) * 1_000_000 + user_us
+    out.system_us = Int(buf[2]) * 1_000_000 + system_us
+    out.peak_rss_bytes = Int(buf[4]) if mac else Int(buf[4]) * 1024
+    out.voluntary_switches = Int(buf[16])
+    out.involuntary_switches = Int(buf[17])
     return out^
 
 
@@ -783,16 +827,16 @@ def status_field(text: String, field: String) -> Int:
 
 
 struct ProcessFacts(Copyable, Movable):
-    """What the kernel says about this process, read from `/proc/self/status`."""
+    """What the kernel says about this process."""
 
     var peak_rss_bytes: Int
     """The high water mark of resident memory, which never falls."""
 
     var rss_bytes: Int
-    """Resident memory right now."""
+    """Resident memory right now, or zero where the kernel does not say."""
 
     var threads: Int
-    """How many threads exist right now."""
+    """How many threads exist right now, or zero where the kernel does not say."""
 
     var voluntary_switches: Int
     """Context switches this process asked for, which is mostly waiting."""
@@ -810,29 +854,31 @@ struct ProcessFacts(Copyable, Movable):
 
 
 def read_process_facts() -> ProcessFacts:
-    """Reads the process facts, returning zeros where the file is not readable.
+    """Reads the process facts, from `getrusage` and from `/proc` where it exists.
 
-    On anything that is not Linux there is no `/proc`, and the harness reports
-    zero rather than failing, because a machine that cannot report memory can
-    still report time.
+    The peak resident set and the two context switch counts come from
+    `getrusage`, which every platform this runs on has. Current resident memory
+    and the thread count come from `/proc/self/status`, because `getrusage` has
+    no field for either, and they stay at zero on a platform without a `/proc`.
+    That is a smaller hole than the one this replaces and it is in the two
+    numbers nothing is claimed about: the headline is peak memory, which is now
+    measured everywhere, and the per run current resident set is only used to
+    fill in a peak that was already read.
 
     Returns:
         The facts.
     """
+    var usage = read_usage()
     var facts = ProcessFacts()
+    facts.peak_rss_bytes = usage.peak_rss_bytes
+    facts.voluntary_switches = usage.voluntary_switches
+    facts.involuntary_switches = usage.involuntary_switches
     try:
         with open("/proc/self/status", "r") as handle:
             var text = handle.read()
-            # The kernel reports these in kibibytes and the harness reports bytes.
-            facts.peak_rss_bytes = status_field(text, "VmHWM") * 1024
+            # The kernel reports this in kibibytes and the harness reports bytes.
             facts.rss_bytes = status_field(text, "VmRSS") * 1024
             facts.threads = status_field(text, "Threads")
-            facts.voluntary_switches = status_field(
-                text, "voluntary_ctxt_switches"
-            )
-            facts.involuntary_switches = status_field(
-                text, "nonvoluntary_ctxt_switches"
-            )
     except:
         pass
     return facts^
@@ -917,7 +963,7 @@ def main() raises:
     var load_ns = perf_counter_ns() - load_start
     var loaded = read_process_facts()
 
-    var cpu_before = read_cpu_ticks()
+    var cpu_before = read_usage()
     var timings = List[Int]()
     var run_rss = List[Int]()
     var run_peaks = List[Int]()
@@ -958,7 +1004,7 @@ def main() raises:
         )
         return
 
-    var cpu_after = read_cpu_ticks()
+    var cpu_after = read_usage()
     var after = read_process_facts()
 
     # Numbers go in `sums` and text goes in `hashes`, and a column is in exactly
@@ -1024,10 +1070,12 @@ def main() raises:
         )
     runs_json += "]"
 
-    # A tick is a hundredth of a second. See `read_cpu_ticks` for why this covers
-    # the whole timed region rather than one run.
-    var cpu_user_s = Float64(cpu_after[0] - cpu_before[0]) / 100.0
-    var cpu_sys_s = Float64(cpu_after[1] - cpu_before[1]) / 100.0
+    # CPU covers the whole timed region rather than one run, because it is read
+    # once before the first and once after the last. `getrusage` reports in
+    # microseconds, so the region no longer has to be long to be resolvable, but
+    # reading it per run would mean a syscall inside the timed region.
+    var cpu_user_s = Float64(cpu_after.user_us - cpu_before.user_us) / 1e6
+    var cpu_sys_s = Float64(cpu_after.system_us - cpu_before.system_us) / 1e6
 
     print(
         String(
