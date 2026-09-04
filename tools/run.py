@@ -13,6 +13,7 @@ normalized cross machine comparison is a model rather than a measurement.
 Usage:
     python tools/run.py --suite db-benchmark --size 0.5GB --engines all --runs 10
     python tools/run.py --suite ingestion --size 10M --engines all --runs 7
+    python tools/run.py --suite tpch --size sf1 --runs 1 --verify exact
 """
 
 from __future__ import annotations
@@ -85,6 +86,7 @@ def measure_one(
     io: str,
     runs: int,
     timeout_s: int,
+    answer: Path | None = None,
 ) -> metrics.Measurement:
     """Starts a worker for one pairing and reads back what it measured.
 
@@ -96,6 +98,8 @@ def measure_one(
         io: The io mode, either `memory` or `scan`.
         runs: How many runs.
         timeout_s: How long to wait before giving up on the worker.
+        answer: Where the worker should write its answer for the exact check, or
+            None, which is every run that did not ask for it.
 
     Returns:
         The measurement, or a failed one carrying the reason.
@@ -121,6 +125,8 @@ def measure_one(
         "--timeout",
         str(max(30, timeout_s - 30)),
     ]
+    if answer is not None:
+        command += ["--answer", str(answer)]
     try:
         completed = subprocess.run(
             command, capture_output=True, text=True, timeout=timeout_s, check=False
@@ -218,6 +224,75 @@ def agreement(measurements: list[metrics.Measurement]) -> dict[str, dict]:
     return report
 
 
+def run_exact_check(answers: Path, suite: str, keep: bool) -> dict:
+    """Runs the exact answer check over what the workers wrote, and tidies up.
+
+    In a subprocess and not in here, for the same reason the measurements are: this
+    imports pandas and the whole comparison layer out of a firepanda-compat
+    checkout, and doing that in the process that is about to write the result file
+    would put a second pandas into an interpreter that already has engines loaded.
+
+    A failure to run the check is recorded and does not fail the run. The timings
+    are already taken and they are still good, and a missing compat checkout is a
+    thing about the machine rather than about the answers.
+
+    Args:
+        answers: The directory the workers wrote into.
+        suite: Which suite ran, which is what chooses the tolerance per query and
+            is not in the directory being handed over, since that directory is
+            already inside it.
+        keep: Whether to leave the Arrow IPC files behind afterwards.
+
+    Returns:
+        The verdict document, or one carrying the reason there is not one.
+    """
+    verdicts = answers / "verdicts.json"
+    command = [
+        sys.executable,
+        str(Path(__file__).resolve().parent / "verify.py"),
+        "--answers",
+        str(answers),
+        "--suite",
+        suite,
+        "--json",
+        str(verdicts),
+    ]
+    print("\nexact check")
+    completed = subprocess.run(command, capture_output=True, text=True, check=False)
+    print(completed.stdout.rstrip())
+    if not verdicts.exists():
+        tail = (completed.stderr or "").strip().splitlines()[-3:]
+        print(" | ".join(tail), file=sys.stderr)
+        return {"check": "exact", "ran": False, "note": " | ".join(tail), "agreed": True}
+
+    document = json.loads(verdicts.read_text())
+    document["ran"] = True
+    if not keep:
+        # Only the files this run created, and then the directories they were in
+        # if they are empty. An answer file for the ingestion suite is the size of
+        # the dataset, so leaving them behind by default fills a laptop, and
+        # deleting a whole tree by name is how a harness eats something else.
+        for path in sorted(answers.rglob("*.arrow")):
+            path.unlink()
+        verdicts.unlink()
+        for path in sorted(answers.rglob("*"), reverse=True):
+            if path.is_dir() and not any(path.iterdir()):
+                path.rmdir()
+        # And then the three levels this run could have created, which are the size
+        # directory, the suite above it and `answers` above that, each only if it is
+        # empty. Three named levels rather than a walk upwards, because a walk
+        # upwards that meets an empty directory it did not create keeps going, and a
+        # tidy up that can leave the tree it was given is not a tidy up. Without it a
+        # laptop grows an empty directory per suite, which is litter rather than
+        # damage and is still the harness leaving its tools out.
+        for empty in (answers, answers.parent, answers.parent.parent):
+            if empty.is_dir() and not any(empty.iterdir()):
+                empty.rmdir()
+    else:
+        print(f"answers kept in {answers}")
+    return document
+
+
 def machine_slug(machine: dict) -> str:
     """Reduces a machine description to something that can go in a file name.
 
@@ -267,7 +342,10 @@ def main(argv: list[str] | None = None) -> int:
         argv: The arguments, or None for `sys.argv`.
 
     Returns:
-        A process exit status.
+        A process exit status. Zero, unless the exact check was asked for and
+        disagreed, which is the one thing here that is a failure rather than a
+        result: everything else this prints is a measurement, and a measurement
+        that came out badly is still a measurement.
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--suite", default="db-benchmark", choices=sorted(query_registry.SUITES))
@@ -288,6 +366,22 @@ def main(argv: list[str] | None = None) -> int:
         "--env",
         type=Path,
         help="an env.json from env_report.py, consulted only for fields this run could not probe",
+    )
+    parser.add_argument(
+        "--verify",
+        default="fingerprint",
+        choices=("fingerprint", "exact"),
+        help="fingerprint is the row count, the column sums and the text digests, "
+        "it is what every run does and it is on the timed path. exact additionally "
+        "writes each answer to Arrow IPC after the last timed run and compares them "
+        "row by row through the compat comparison layer, which is slow, needs disk "
+        "the size of the answers, and catches the permutation a fingerprint cannot",
+    )
+    parser.add_argument(
+        "--keep-answers",
+        action="store_true",
+        help="leave the Arrow IPC answers behind after the exact check, for a "
+        "person who has to look at a disagreement by hand",
     )
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
@@ -320,14 +414,22 @@ def main(argv: list[str] | None = None) -> int:
         f"x {len(names)} engines x {args.runs} runs"
     )
 
+    # Where the exact check's answers go, when it was asked for. Under `results/`
+    # and named the way the result files are, so a directory left behind by a run
+    # that was interrupted says which run it belonged to.
+    answers_root = (
+        ROOT / "results" / "answers" / args.suite / size if args.verify == "exact" else None
+    )
+
     measurements: list[metrics.Measurement] = []
     started = time.perf_counter()
     for query in selected:
         for engine in names:
             label = f"  {query.name:<17} {engine:<10}"
             print(label, end="", flush=True)
+            answer = answers_root / query.name / f"{engine}.arrow" if answers_root else None
             measurement = measure_one(
-                engine, query.name, manifest, args.suite, io, args.runs, args.timeout
+                engine, query.name, manifest, args.suite, io, args.runs, args.timeout, answer
             )
             measurements.append(measurement)
             if measurement.ok:
@@ -341,6 +443,10 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 print(f" skipped: {measurement.note[:88]}")
     elapsed = time.perf_counter() - started
+
+    # After the timing and never inside it, so nothing above this line can move
+    # because verification was on.
+    exact = run_exact_check(answers_root, args.suite, args.keep_answers) if answers_root else None
 
     document = {
         "suite": args.suite,
@@ -360,6 +466,11 @@ def main(argv: list[str] | None = None) -> int:
         "results": {},
         "detail": {},
     }
+    if exact is not None:
+        # Recorded next to the fingerprint agreement rather than instead of it. The
+        # two answer different questions and a reader needs to know which one was
+        # asked, because most result files will only ever carry the first.
+        document["verification"] = exact
     for measurement in measurements:
         key = f"{measurement.query}/{measurement.engine}"
         entry = measurement.summary()
@@ -400,6 +511,19 @@ def main(argv: list[str] | None = None) -> int:
             "warning: engines disagreed on " + ", ".join(sorted(disagreed)),
             file=sys.stderr,
         )
+    if exact and not exact.get("agreed", True):
+        exactly = [q for q, e in exact["queries"].items() if not e["agreed"]]
+        print(
+            "the exact check disagreed on " + ", ".join(sorted(exactly)),
+            file=sys.stderr,
+        )
+        # Non zero, unlike the fingerprint disagreement above, which warns. The
+        # difference is that the fingerprint runs whether anyone wanted it or not
+        # and the exact check runs because somebody asked for it, and a check that
+        # somebody asked for and that failed should not exit zero. The result file
+        # is already written either way, because the timings are still good and a
+        # disagreement is a thing about the answers rather than about the numbers.
+        return 1
     return 0
 
 

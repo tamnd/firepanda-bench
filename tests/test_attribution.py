@@ -118,3 +118,83 @@ def test_a_run_without_firepanda_owes_no_toolchain(tmp_path):
     )
 
     assert validate_results.check(path) == []
+
+
+def test_a_file_with_no_exact_check_in_it_is_still_a_result(tmp_path):
+    # The exact check is off by default, so most files will never carry one.
+    path = tmp_path / "r.json"
+    path.write_text(json.dumps(document()))
+
+    assert validate_results.check(path) == []
+
+
+def test_an_exact_check_has_to_name_the_comparison_layer_it_used(tmp_path):
+    # A verdict is a claim about two answers under one definition of sameness, and
+    # a file that claims it verified something without saying which definition it
+    # verified it against cannot be read a year later.
+    path = tmp_path / "r.json"
+    path.write_text(
+        json.dumps(
+            document(
+                verification={
+                    "check": "exact",
+                    "ran": True,
+                    "agreed": True,
+                    "queries": {"db-benchmark/q1": {"agreed": True}},
+                    "compat": {"path": "/x", "revision": ""},
+                }
+            )
+        )
+    )
+
+    problems = validate_results.check(path)
+
+    assert any("compat revision" in problem for problem in problems)
+
+
+def test_an_exact_check_that_could_not_run_only_owes_a_reason(tmp_path):
+    path = tmp_path / "r.json"
+    path.write_text(
+        json.dumps(
+            document(
+                verification={
+                    "check": "exact",
+                    "ran": False,
+                    "agreed": True,
+                    "note": "no firepanda-compat checkout on this machine",
+                }
+            )
+        )
+    )
+
+    assert validate_results.check(path) == []
+
+
+def test_an_exact_check_that_could_not_run_and_will_not_say_why_is_rejected(tmp_path):
+    path = tmp_path / "r.json"
+    path.write_text(
+        json.dumps(document(verification={"check": "exact", "ran": False, "agreed": True}))
+    )
+
+    problems = validate_results.check(path)
+
+    assert any("does not say why" in problem for problem in problems)
+
+
+def test_a_complete_exact_check_validates(tmp_path):
+    path = tmp_path / "r.json"
+    path.write_text(
+        json.dumps(
+            document(
+                verification={
+                    "check": "exact",
+                    "ran": True,
+                    "agreed": True,
+                    "queries": {"db-benchmark/q1": {"agreed": True}},
+                    "compat": {"path": "/x", "revision": "b79f16c"},
+                }
+            )
+        )
+    )
+
+    assert validate_results.check(path) == []

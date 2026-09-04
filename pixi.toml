@@ -66,6 +66,11 @@ report = "python tools/report.py"
 # firepanda-compat cost matrix has a row for. Answers which operation inside a slow
 # query is the slow one, which no number in this repository can.
 operations = "python tools/operations.py"
+
+# The exact answer check, over answer files a run wrote with --verify exact. Needs a
+# firepanda-compat checkout, because it imports that repository's comparison layer
+# rather than carrying a second copy of the rules about what the same answer means.
+verify = "python tools/verify.py"
 env-report = "python tools/env_report.py"
 
 # Checks a dataframe engine's TPC-H answers against the specification's published
