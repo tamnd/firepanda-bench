@@ -4,6 +4,14 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### Every query says which operations it is made of
+
+A query here is five or six pandas operations wrapped into one number, so a reader who sees firepanda lose a row has no way to find out which operation inside it lost. The [compat cost matrix](https://github.com/tamnd/firepanda-compat/blob/main/docs/specs/09-resources.md) is a row per operation and answers exactly that, and until now there was no link between the two.
+
+Each query now declares the pandas operations its pandas implementation calls, read off `engines/pandas_engine.py` and `engines/pandas_tpch.py` rather than off the query text, and the report carries a table per suite. `pixi run operations` prints the same thing, and `--query tpch/q9` prints one query with the matching matrix rows named.
+
+The last column of that table is the operations a published query runs that the cost matrix has no row for. There are 12 of them across the three suites: `DataFrame.assign`, `GroupBy.count`, `GroupBy.head`, `GroupBy.median`, `GroupBy.min`, `GroupBy.std`, `Series.map`, `Series.mean`, `pandas.read_csv`, `str.endswith`, `str.slice` and `str.startswith`. That is a hole over there with a query attached to it, and it is published for the same reason every other loss in this repository is.
+
 ### Peak memory is published as a ratio and plotted, not left as raw bytes
 
 The claim is ten times the speed of pandas on a tenth of the memory, and until now the report answered the first half in ratios and the second half in bytes. The memory table has always been there and the scorecard has always carried a memory geometric mean, so nothing new is measured here. What changed is that the numbers are now readable.

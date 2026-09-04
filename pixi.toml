@@ -61,6 +61,11 @@ bench = "python tools/run.py"
 repro = "python tools/repro.py"
 
 report = "python tools/report.py"
+
+# What each query is made of, in pandas names, and which of those operations the
+# firepanda-compat cost matrix has a row for. Answers which operation inside a slow
+# query is the slow one, which no number in this repository can.
+operations = "python tools/operations.py"
 env-report = "python tools/env_report.py"
 
 # Checks a dataframe engine's TPC-H answers against the specification's published

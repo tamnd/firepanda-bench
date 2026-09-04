@@ -36,6 +36,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import operations
 import queries as query_registry
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -306,6 +307,75 @@ def headline(document: dict, engines: list[str]) -> str:
         f"The goal is ten and ten, both numbers are published every run whatever they "
         f"say, and the per query tables below are where a mean this shape comes apart."
     )
+
+
+def made_of(suite: str) -> list[str]:
+    """The operations inside each query, and which of them the cost matrix measures.
+
+    Every table above this one is a number per query, and a query is five or six
+    operations wrapped into one. A reader who sees a row where firepanda loses wants
+    to know which operation inside it lost, and that answer is in the compat cost
+    matrix rather than here. This is the index into it.
+
+    It is rendered once per suite at the end rather than inside each result section,
+    because what a query is made of is a property of the query and not of the machine
+    it ran on, and the same table ten times is a table nobody reads.
+
+    Args:
+        suite: Which suite is being reported.
+
+    Returns:
+        The markdown lines, or nothing when no query in the suite declares anything.
+    """
+    table = operations.matrix()
+    rows: list[tuple[str, tuple[str, ...], list[str]]] = []
+    for query in query_registry.for_suite(suite):
+        names = operations.declared(suite, query.name)
+        if names:
+            rows.append((query.name, names, operations.uncovered(names, table)))
+    if not rows:
+        return []
+
+    lines = ["", f"## What each {suite} query is made of", ""]
+    lines.append(
+        "This repository answers how fast on published workloads. "
+        f"[firepanda-compat]({operations.MATRIX_URL}) answers how fast per operation, "
+        "one row per pandas operation on a one million row corpus, which is the "
+        "question a reader asks the moment a query in the tables above loses. These "
+        "are the operations the pandas implementation of each query calls, so a slow "
+        "query can be looked up there by the thing inside it rather than by its name."
+    )
+    lines.append("")
+    lines.append("| query | operations | not in the matrix |")
+    lines.append("| --- | --- | --- |")
+    for name, names, gaps in rows:
+        lines.append(
+            f"| {name} | {', '.join(f'`{n}`' for n in names)} | "
+            f"{', '.join(f'`{n}`' for n in gaps) if gaps else 'none'} |"
+        )
+
+    every = {gap for _, _, gaps in rows for gap in gaps}
+    if every:
+        count = f"{len(every)} operation{'' if len(every) == 1 else 's'}"
+        lines.append("")
+        lines.append(
+            "The last column is a hole in the cost matrix with a query attached to "
+            "it, and it is published rather than quietly dropped for the same reason "
+            f"every other loss in this report is. {count} this suite runs "
+            + ("has" if len(every) == 1 else "have")
+            + " no row over there: "
+            + ", ".join(f"`{name}`" for name in sorted(every))
+            + "."
+        )
+        if every == {"pandas.read_csv"}:
+            lines.append("")
+            lines.append(
+                "That one is not really a hole. Reading a CSV is what this whole "
+                "suite measures, on five file shapes and against four engines, and "
+                "the compat corpus is Arrow on disk rather than text. A row over "
+                "there would be a worse version of the table above."
+            )
+    return lines
 
 
 def render(document: dict, path: Path) -> str:
@@ -592,8 +662,15 @@ def main(argv: list[str] | None = None) -> int:
         "machine comparison is a model and this file is a measurement."
     )
     sections.append("")
-    for path in paths:
-        sections.append(render(load_result(path), path))
+    documents = [(path, load_result(path)) for path in paths]
+    for path, document in documents:
+        sections.append(render(document, path))
+
+    # Once per suite, after the results, because what a query is made of does not
+    # change with the machine it ran on and the same table under every result section
+    # is a table nobody reads.
+    for suite in dict.fromkeys(document["suite"] for _, document in documents):
+        sections.append("\n".join(made_of(suite)))
 
     text = "\n".join(sections)
     if args.out:
