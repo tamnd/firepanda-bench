@@ -10,7 +10,9 @@ A query here is five or six pandas operations wrapped into one number, so a read
 
 Each query now declares the pandas operations its pandas implementation calls, read off `engines/pandas_engine.py` and `engines/pandas_tpch.py` rather than off the query text, and the report carries a table per suite. `pixi run operations` prints the same thing, and `--query tpch/q9` prints one query with the matching matrix rows named.
 
-The last column of that table is the operations a published query runs that the cost matrix has no row for. There are 12 of them across the three suites: `DataFrame.assign`, `GroupBy.count`, `GroupBy.head`, `GroupBy.median`, `GroupBy.min`, `GroupBy.std`, `Series.map`, `Series.mean`, `pandas.read_csv`, `str.endswith`, `str.slice` and `str.startswith`. That is a hole over there with a query attached to it, and it is published for the same reason every other loss in this repository is.
+The last column of that table is the operations a published query runs that the cost matrix has no row for. On the first run there were 12 of them across the three suites: `DataFrame.assign`, `GroupBy.count`, `GroupBy.head`, `GroupBy.median`, `GroupBy.min`, `GroupBy.std`, `Series.map`, `Series.mean`, `pandas.read_csv`, `str.endswith`, `str.slice` and `str.startswith`. That is a hole over there with a query attached to it, and it is published for the same reason every other loss in this repository is.
+
+Eleven of those twelve have rows now, so the vendored copy of the table is refreshed to the 65 operation version and the last column is down to `pandas.read_csv`. That one stays, and the report says it is a deliberate exclusion rather than a hole: reading a CSV is what the ingestion suite here already measures, on five file shapes against four engines, and the compat corpus is Arrow on disk rather than text. The two that mattered were `GroupBy.median` and `GroupBy.std`, because db-benchmark q6 exists to measure a reduction that has to keep its values per group and the cost matrix had never measured one at all.
 
 ### Peak memory is published as a ratio and plotted, not left as raw bytes
 
