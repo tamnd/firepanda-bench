@@ -43,6 +43,12 @@ MojoFrame is in that table as a discipline rather than a courtesy. It supports a
 
 Microbenchmarks are not here. They live in the main repository, because they run on every pull request and must not require Python or any competing engine.
 
+## Which operation inside a slow query is the slow one
+
+This repository answers how fast on published workloads. [firepanda-compat](https://github.com/tamnd/firepanda-compat) answers how fast per operation, a row per pandas operation with wall clock and peak memory on a one million row corpus. They are two halves of the same question, because a query here is five or six operations wrapped into one number and a reader who sees firepanda lose a query wants to know which operation inside it lost.
+
+So every query declares what it is made of, in pandas names, read off the pandas implementation rather than off the query text. `pixi run operations` prints it, the report carries the table per suite, and the last column of that table is the operations a published query runs that the cost matrix has no row for, which is a hole over there with a query attached to it.
+
 ## How a run is fair, and where it is not
 
 **One process per engine and query.** Peak resident set is a high water mark on a process, so two engines sharing one interpreter cannot both be measured. The worker loads one engine, runs one query the requested number of times, and reports wall clock, resident set, peak resident set, user and system CPU, page faults and block IO per run.

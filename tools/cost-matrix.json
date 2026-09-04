@@ -1,0 +1,585 @@
+{
+  "chained": 20,
+  "count": 53,
+  "generator": "fpcompat.budget",
+  "operations": {
+    "astype int64 to int32": {
+      "chained": false,
+      "covers": [
+        "DataFrame.astype"
+      ],
+      "needs": [
+        "numeric"
+      ],
+      "section": "basics"
+    },
+    "astype to category": {
+      "chained": false,
+      "covers": [
+        "DataFrame.astype"
+      ],
+      "needs": [
+        "keyed"
+      ],
+      "section": "categorical"
+    },
+    "boolean mask": {
+      "chained": false,
+      "covers": [
+        "DataFrame.loc"
+      ],
+      "needs": [
+        "numeric"
+      ],
+      "section": "indexing"
+    },
+    "cast then groupby.agg": {
+      "chained": true,
+      "covers": [
+        "DataFrame.astype",
+        "DataFrame.groupby",
+        "GroupBy.agg"
+      ],
+      "needs": [
+        "keyed"
+      ],
+      "section": "basics"
+    },
+    "cast then sort then head": {
+      "chained": true,
+      "covers": [
+        "DataFrame.astype",
+        "DataFrame.sort_values",
+        "DataFrame.head"
+      ],
+      "needs": [
+        "numeric"
+      ],
+      "section": "indexing"
+    },
+    "category then groupby.sum": {
+      "chained": true,
+      "covers": [
+        "DataFrame.astype",
+        "DataFrame.groupby",
+        "GroupBy.sum"
+      ],
+      "needs": [
+        "keyed"
+      ],
+      "section": "categorical"
+    },
+    "concat then sort then drop_duplicates": {
+      "chained": true,
+      "covers": [
+        "pandas.concat",
+        "DataFrame.sort_values",
+        "DataFrame.drop_duplicates"
+      ],
+      "needs": [
+        "numeric"
+      ],
+      "section": "reshape"
+    },
+    "concat two frames": {
+      "chained": false,
+      "covers": [
+        "pandas.concat"
+      ],
+      "needs": [
+        "numeric"
+      ],
+      "section": "reshape"
+    },
+    "cumsum": {
+      "chained": false,
+      "covers": [
+        "Series.cumsum"
+      ],
+      "needs": [
+        "numeric"
+      ],
+      "section": "stats"
+    },
+    "describe": {
+      "chained": false,
+      "covers": [
+        "DataFrame.describe"
+      ],
+      "needs": [
+        "numeric"
+      ],
+      "section": "stats"
+    },
+    "drop_duplicates": {
+      "chained": false,
+      "covers": [
+        "DataFrame.drop_duplicates"
+      ],
+      "needs": [
+        "keyed"
+      ],
+      "section": "basics"
+    },
+    "drop_duplicates then merge": {
+      "chained": true,
+      "covers": [
+        "DataFrame.drop_duplicates",
+        "DataFrame.merge"
+      ],
+      "needs": [
+        "keyed",
+        "lookup"
+      ],
+      "section": "reshape"
+    },
+    "dt.floor to the hour": {
+      "chained": false,
+      "covers": [
+        "dt.floor"
+      ],
+      "needs": [
+        "temporal"
+      ],
+      "section": "temporal"
+    },
+    "dt.year": {
+      "chained": false,
+      "covers": [
+        "dt.year"
+      ],
+      "needs": [
+        "temporal"
+      ],
+      "section": "temporal"
+    },
+    "dt.year then groupby.mean": {
+      "chained": true,
+      "covers": [
+        "dt.year",
+        "DataFrame.groupby",
+        "GroupBy.mean"
+      ],
+      "needs": [
+        "temporal"
+      ],
+      "section": "temporal"
+    },
+    "filter then groupby.sum": {
+      "chained": true,
+      "covers": [
+        "DataFrame.loc",
+        "DataFrame.groupby",
+        "GroupBy.sum"
+      ],
+      "needs": [
+        "keyed"
+      ],
+      "section": "groupby"
+    },
+    "filter then sort then groupby": {
+      "chained": true,
+      "covers": [
+        "DataFrame.loc",
+        "DataFrame.sort_values",
+        "DataFrame.groupby"
+      ],
+      "needs": [
+        "keyed"
+      ],
+      "section": "indexing"
+    },
+    "floor then resample then cumsum": {
+      "chained": true,
+      "covers": [
+        "dt.floor",
+        "DataFrame.resample",
+        "Series.cumsum"
+      ],
+      "needs": [
+        "temporal"
+      ],
+      "section": "temporal"
+    },
+    "groupby then sort then head": {
+      "chained": true,
+      "covers": [
+        "DataFrame.groupby",
+        "GroupBy.sum",
+        "DataFrame.sort_values"
+      ],
+      "needs": [
+        "keyed"
+      ],
+      "section": "groupby"
+    },
+    "groupby.agg then merge": {
+      "chained": true,
+      "covers": [
+        "GroupBy.agg",
+        "DataFrame.reset_index",
+        "DataFrame.merge"
+      ],
+      "needs": [
+        "keyed",
+        "lookup"
+      ],
+      "section": "reshape"
+    },
+    "groupby.agg two functions": {
+      "chained": false,
+      "covers": [
+        "GroupBy.agg"
+      ],
+      "needs": [
+        "keyed"
+      ],
+      "section": "groupby"
+    },
+    "groupby.apply lambda": {
+      "chained": false,
+      "covers": [
+        "GroupBy.apply"
+      ],
+      "needs": [
+        "keyed"
+      ],
+      "section": "groupby"
+    },
+    "groupby.mean string key": {
+      "chained": false,
+      "covers": [
+        "DataFrame.groupby",
+        "GroupBy.mean"
+      ],
+      "needs": [
+        "keyed"
+      ],
+      "section": "groupby"
+    },
+    "groupby.nunique high cardinality": {
+      "chained": false,
+      "covers": [
+        "GroupBy.nunique"
+      ],
+      "needs": [
+        "keyed"
+      ],
+      "section": "groupby"
+    },
+    "groupby.sum 1e3 groups": {
+      "chained": false,
+      "covers": [
+        "DataFrame.groupby",
+        "GroupBy.sum"
+      ],
+      "needs": [
+        "keyed"
+      ],
+      "section": "groupby"
+    },
+    "isin against 50 values": {
+      "chained": false,
+      "covers": [
+        "Series.isin"
+      ],
+      "needs": [
+        "keyed"
+      ],
+      "section": "basics"
+    },
+    "isin then groupby.nunique": {
+      "chained": true,
+      "covers": [
+        "Series.isin",
+        "DataFrame.loc",
+        "GroupBy.nunique"
+      ],
+      "needs": [
+        "keyed"
+      ],
+      "section": "basics"
+    },
+    "merge on int64 key": {
+      "chained": false,
+      "covers": [
+        "DataFrame.merge"
+      ],
+      "needs": [
+        "keyed",
+        "lookup"
+      ],
+      "section": "reshape"
+    },
+    "merge then filter then sort": {
+      "chained": true,
+      "covers": [
+        "DataFrame.merge",
+        "DataFrame.loc",
+        "DataFrame.sort_values"
+      ],
+      "needs": [
+        "keyed",
+        "lookup"
+      ],
+      "section": "reshape"
+    },
+    "merge then groupby.mean": {
+      "chained": true,
+      "covers": [
+        "DataFrame.merge",
+        "DataFrame.groupby",
+        "GroupBy.mean"
+      ],
+      "needs": [
+        "keyed",
+        "lookup"
+      ],
+      "section": "reshape"
+    },
+    "pivot_table": {
+      "chained": false,
+      "covers": [
+        "DataFrame.pivot_table"
+      ],
+      "needs": [
+        "keyed"
+      ],
+      "section": "reshape"
+    },
+    "quantile": {
+      "chained": false,
+      "covers": [
+        "Series.quantile"
+      ],
+      "needs": [
+        "numeric"
+      ],
+      "section": "stats"
+    },
+    "rank": {
+      "chained": false,
+      "covers": [
+        "Series.rank"
+      ],
+      "needs": [
+        "numeric"
+      ],
+      "section": "stats"
+    },
+    "rank then filter then groupby.max": {
+      "chained": true,
+      "covers": [
+        "Series.rank",
+        "DataFrame.loc",
+        "GroupBy.max"
+      ],
+      "needs": [
+        "keyed"
+      ],
+      "section": "stats"
+    },
+    "resample.sum hourly": {
+      "chained": false,
+      "covers": [
+        "DataFrame.resample",
+        "Resampler.sum"
+      ],
+      "needs": [
+        "temporal"
+      ],
+      "section": "groupby"
+    },
+    "rolling then dropna then max": {
+      "chained": true,
+      "covers": [
+        "Rolling.mean",
+        "Series.dropna",
+        "Series.max"
+      ],
+      "needs": [
+        "numeric"
+      ],
+      "section": "windows"
+    },
+    "rolling.mean window 100": {
+      "chained": false,
+      "covers": [
+        "DataFrame.rolling",
+        "Rolling.mean"
+      ],
+      "needs": [
+        "numeric"
+      ],
+      "section": "windows"
+    },
+    "set_index then loc": {
+      "chained": false,
+      "covers": [
+        "DataFrame.set_index",
+        "DataFrame.loc"
+      ],
+      "needs": [
+        "keyed"
+      ],
+      "section": "indexing"
+    },
+    "sort_values int64": {
+      "chained": false,
+      "covers": [
+        "DataFrame.sort_values"
+      ],
+      "needs": [
+        "numeric"
+      ],
+      "section": "indexing"
+    },
+    "sort_values two columns": {
+      "chained": false,
+      "covers": [
+        "DataFrame.sort_values"
+      ],
+      "needs": [
+        "keyed"
+      ],
+      "section": "indexing"
+    },
+    "str.contains literal": {
+      "chained": false,
+      "covers": [
+        "str.contains"
+      ],
+      "needs": [
+        "strings"
+      ],
+      "section": "strings"
+    },
+    "str.contains regex": {
+      "chained": false,
+      "covers": [
+        "str.contains"
+      ],
+      "needs": [
+        "strings"
+      ],
+      "section": "strings"
+    },
+    "str.contains then groupby.size": {
+      "chained": true,
+      "covers": [
+        "str.contains",
+        "DataFrame.groupby",
+        "GroupBy.size"
+      ],
+      "needs": [
+        "strings"
+      ],
+      "section": "strings"
+    },
+    "str.len": {
+      "chained": false,
+      "covers": [
+        "str.len"
+      ],
+      "needs": [
+        "strings"
+      ],
+      "section": "strings"
+    },
+    "str.len then filter then mean": {
+      "chained": true,
+      "covers": [
+        "str.len",
+        "DataFrame.loc",
+        "GroupBy.mean"
+      ],
+      "needs": [
+        "strings"
+      ],
+      "section": "strings"
+    },
+    "str.replace literal": {
+      "chained": false,
+      "covers": [
+        "str.replace"
+      ],
+      "needs": [
+        "strings"
+      ],
+      "section": "strings"
+    },
+    "str.split then get": {
+      "chained": false,
+      "covers": [
+        "str.split",
+        "str.get"
+      ],
+      "needs": [
+        "strings"
+      ],
+      "section": "strings"
+    },
+    "str.upper": {
+      "chained": false,
+      "covers": [
+        "str.upper"
+      ],
+      "needs": [
+        "strings"
+      ],
+      "section": "strings"
+    },
+    "str.upper then drop_duplicates": {
+      "chained": true,
+      "covers": [
+        "str.upper",
+        "Series.drop_duplicates"
+      ],
+      "needs": [
+        "strings"
+      ],
+      "section": "strings"
+    },
+    "sum": {
+      "chained": false,
+      "covers": [
+        "Series.sum"
+      ],
+      "needs": [
+        "numeric"
+      ],
+      "section": "stats"
+    },
+    "value_counts": {
+      "chained": false,
+      "covers": [
+        "Series.value_counts"
+      ],
+      "needs": [
+        "keyed"
+      ],
+      "section": "stats"
+    },
+    "value_counts then head": {
+      "chained": true,
+      "covers": [
+        "Series.value_counts",
+        "DataFrame.head"
+      ],
+      "needs": [
+        "keyed"
+      ],
+      "section": "stats"
+    },
+    "where": {
+      "chained": false,
+      "covers": [
+        "DataFrame.where"
+      ],
+      "needs": [
+        "numeric"
+      ],
+      "section": "basics"
+    }
+  }
+}
