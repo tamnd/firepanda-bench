@@ -108,3 +108,72 @@ def test_cpu_cell_carries_the_core_count():
     """Four times faster on sixteen cores is not four times faster on one."""
     entry = {"ok": True, "cpu_user_s": 0.8, "cpu_sys_s": 0.2, "parallelism": 7.5}
     assert report.cpu_cell(entry) == "1000 ms (7.5x)"
+
+
+def test_bytes_cell_carries_the_ratio_to_the_baseline():
+    """Whether 100 MB is good depends entirely on what pandas did on the same query
+    on the same machine, which is the thing the table knows and used to not say."""
+    mine = {"ok": True, "peak_rss_bytes": 100 << 20}
+    base = {"ok": True, "peak_rss_bytes": 400 << 20}
+    assert report.bytes_cell(mine, base) == "100 MB (4.00x)"
+
+
+def test_bytes_cell_does_not_compare_the_baseline_to_itself():
+    """A 1.00x against pandas in the pandas column is noise in every row."""
+    base = {"ok": True, "peak_rss_bytes": 400 << 20}
+    assert report.bytes_cell(base, base) == "400 MB"
+
+
+def test_bytes_cell_prints_the_bytes_when_the_baseline_did_not_run():
+    """The raw number is still the honest one. Only the comparison is missing."""
+    mine = {"ok": True, "peak_rss_bytes": 100 << 20}
+    assert report.bytes_cell(mine, None) == "100 MB"
+    assert report.bytes_cell(mine, {"ok": False}) == "100 MB"
+
+
+def test_bytes_cell_says_nothing_when_there_is_no_sample():
+    assert report.bytes_cell({"ok": True}) == "-"
+    assert report.bytes_cell(None) == "-"
+
+
+def test_a_row_using_more_memory_than_pandas_reads_below_one():
+    """The rows we lose are printed in the same table and in the same units. A join
+    output larger than either input is larger in every engine, and reading 0.50x is
+    the truth about that row rather than a reason to leave it out."""
+    mine = {"ok": True, "peak_rss_bytes": 800 << 20}
+    base = {"ok": True, "peak_rss_bytes": 400 << 20}
+    assert report.bytes_cell(mine, base) == "800 MB (0.50x)"
+
+
+def _with_subject() -> dict:
+    """The two engine document plus firepanda, twice as fast on half the memory."""
+    document = _document(True)
+    document["engines"]["firepanda"] = "0.6.3"
+    document["results"]["q1/firepanda"] = {"ok": True, "median_s": 1.0, "peak_rss_bytes": 100}
+    return document
+
+
+def test_the_headline_is_a_pair_and_not_a_time():
+    """The claim is ten times on a tenth of the memory. Leading with the speed and
+    putting the memory four tables down answers half of it."""
+    line = report.headline(_with_subject(), ["firepanda", "pandas", "polars"])
+    assert "2.00x on time and 2.00x on peak memory" in line
+
+
+def test_the_headline_says_nothing_when_the_subject_did_not_run():
+    """A suite pandas and Polars ran without firepanda has no pair to lead with."""
+    assert report.headline(_document(True), ["pandas", "polars"]) == ""
+
+
+def test_the_headline_is_at_the_top_of_the_section():
+    """Above the tables rather than below them, which is where a reader stops."""
+    text = report.render(_with_subject(), Path("x.json"))
+    body = text[: text.index("| query |")]
+    assert "on peak memory" in body
+
+
+def test_the_memory_table_says_which_way_round_it_reads():
+    """Above one is less memory used, the same direction as the speed ratios and the
+    same direction the compat cost matrix uses."""
+    text = report.render(_with_subject(), Path("x.json"))
+    assert "Above one is less memory used" in text

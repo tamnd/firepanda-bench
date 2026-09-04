@@ -4,6 +4,16 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### Peak memory is published as a ratio and plotted, not left as raw bytes
+
+The claim is ten times the speed of pandas on a tenth of the memory, and until now the report answered the first half in ratios and the second half in bytes. The memory table has always been there and the scorecard has always carried a memory geometric mean, so nothing new is measured here. What changed is that the numbers are now readable.
+
+Each memory cell carries a ratio against pandas, above one meaning less memory used, which is the same direction as the speed ratios and the same direction the [compat cost matrix](https://github.com/tamnd/firepanda-compat/blob/main/docs/specs/09-resources.md) uses. Absolute bytes are the honest raw number and also the one a reader cannot act on, because whether 845 MB is good depends entirely on what the other engine did on the same query on the same machine, which the table knew and did not say.
+
+Every suite now leads with a pair rather than with a time. On the i9-13900K at 0.5GB in memory mode that reads: firepanda against pandas, 1.14x on time and 1.12x on peak memory, over the 13 queries both ran and all four engines agreed on. Those are not the goal numbers and they are the measured ones.
+
+The site draws two charts per group instead of one, wall clock and peak resident memory, still never across a machine, a suite, a size or an io mode. Two charts rather than two axes on one, because a shared x axis with two scales is read wrong by about half of the people who look at it.
+
 ### The join queries stop carrying columns nothing reads
 
 The left join table has four columns and every join query reads two of them, the key and v1. The driver was handing all four to the join, which gathers two columns of ten million rows through the join for a reduction that never looks at them.
