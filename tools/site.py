@@ -53,9 +53,10 @@ PAGE = """<!doctype html>
 <body>
 {body}
 <h2>History</h2>
-<p>One line per engine, one chart per machine, suite, size and io mode. Nothing is
-drawn across two of those, because nothing is comparable across them. A regression
-is a step.</p>
+<p>One line per engine, two charts per machine, suite, size and io mode: wall clock
+and peak resident memory, because the claim is about both. Nothing is drawn across
+two of those four, because nothing is comparable across them. A regression is a
+step.</p>
 <div id="history"></div>
 <script>
 const charts = {specs};
@@ -161,6 +162,9 @@ def history(paths: list[Path]) -> list[dict]:
                     "query": query,
                     "engine": engine,
                     "seconds": entry["median_s"],
+                    # Zero rather than absent when a run has no memory sample, so
+                    # the chart drops the point instead of the whole series.
+                    "peak_mb": (entry.get("peak_rss_bytes") or 0) / (1 << 20),
                     "machine": host,
                 }
             )
@@ -188,20 +192,22 @@ def chart_specs(rows: list[dict]) -> list[dict]:
 
     charts = []
     for (machine, suite, size, io), group in sorted(grouped.items()):
-        charts.append(
-            {
-                "title": f"{suite} at {size}, io {io}, on {machine}",
-                "spec": chart_spec(group),
-            }
-        )
+        where = f"{suite} at {size}, io {io}, on {machine}"
+        charts.append({"title": f"{where}: seconds", "spec": chart_spec(group, "seconds")})
+        memory = [row for row in group if row.get("peak_mb")]
+        if memory:
+            charts.append({"title": f"{where}: peak MB", "spec": chart_spec(memory, "peak_mb")})
     return charts
 
 
-def chart_spec(rows: list[dict]) -> dict:
+def chart_spec(rows: list[dict], field: str = "seconds") -> dict:
     """Builds the Vega-Lite specification for one history chart.
 
     Args:
         rows: The history records for a single comparable group.
+        field: Which measurement to plot, `seconds` or `peak_mb`. Two charts rather
+            than two axes on one, because a shared x axis with two scales is read
+            wrong by about half of the people who look at it.
 
     Returns:
         The specification, with the data inline so the page needs no server.
@@ -214,7 +220,7 @@ def chart_spec(rows: list[dict]) -> dict:
         "height": 160,
         "encoding": {
             "x": {"field": "date", "type": "ordinal", "title": None},
-            "y": {"field": "seconds", "type": "quantitative", "scale": {"type": "log"}},
+            "y": {"field": field, "type": "quantitative", "scale": {"type": "log"}},
             "color": {"field": "engine", "type": "nominal"},
             "facet": {"field": "query", "type": "nominal", "columns": 3},
         },

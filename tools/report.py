@@ -185,11 +185,23 @@ def file_bytes(document: dict, query) -> int:
     return int(entry.get("csv", {}).get("bytes", 0))
 
 
-def bytes_cell(entry: dict | None) -> str:
-    """Formats one engine's peak resident memory.
+def bytes_cell(entry: dict | None, baseline: dict | None = None) -> str:
+    """Formats one engine's peak resident memory, against the baseline's.
+
+    The bytes on their own are the honest raw number and they are also the one a
+    reader cannot use, because whether 118 MB is good depends entirely on what the
+    other engine did on the same query on the same machine. That is the thing the
+    table already knows and used to not say, so working out whether firepanda used a
+    third of what pandas used meant dividing two cells by hand.
+
+    Above one means less memory used, which is the same direction as the speed
+    ratios here and the same direction the compat cost matrix uses, so a reader does
+    not have to work out which way round each table goes.
 
     Args:
         entry: The result entry, or None.
+        baseline: The baseline engine's entry for the same query, or None when this
+            cell is the baseline itself or the baseline did not run.
 
     Returns:
         The cell text.
@@ -197,9 +209,10 @@ def bytes_cell(entry: dict | None) -> str:
     if entry is None or not entry.get("ok") or not entry.get("peak_rss_bytes"):
         return "-"
     value = entry["peak_rss_bytes"]
-    if value >= 1 << 30:
-        return f"{value / (1 << 30):.2f} GB"
-    return f"{value / (1 << 20):.0f} MB"
+    text = f"{value / (1 << 30):.2f} GB" if value >= 1 << 30 else f"{value / (1 << 20):.0f} MB"
+    if baseline and baseline is not entry and baseline.get("ok") and baseline.get("peak_rss_bytes"):
+        text += f" ({baseline['peak_rss_bytes'] / value:.2f}x)"
+    return text
 
 
 def geometric_mean(values: list[float]) -> float:
@@ -266,6 +279,35 @@ def ratios(document: dict, engines: list[str], against: str, subject: str) -> di
     }
 
 
+def headline(document: dict, engines: list[str]) -> str:
+    """The one line summary of a suite, as a pair rather than as a time.
+
+    The claim this repository exists to check is ten times the speed on a tenth of
+    the memory. Leading with the speed and putting the memory four tables down
+    answers half of it and lets a reader assume the other half, which is the half
+    that is harder.
+
+    Args:
+        document: The result document.
+        engines: The engines in the run.
+
+    Returns:
+        The sentence, or an empty string when the subject did not run here.
+    """
+    if SUBJECT not in engines or BASELINE not in engines:
+        return ""
+    scored = ratios(document, engines, BASELINE, SUBJECT)
+    if not scored["speed"]:
+        return ""
+    return (
+        f"**{SUBJECT} against {BASELINE}: {scored['speed_geomean']:.2f}x on time and "
+        f"{scored['memory_geomean']:.2f}x on peak memory**, geometric means over the "
+        f"{len(scored['speed'])} queries both engines ran and every engine agreed on. "
+        f"The goal is ten and ten, both numbers are published every run whatever they "
+        f"say, and the per query tables below are where a mean this shape comes apart."
+    )
+
+
 def render(document: dict, path: Path) -> str:
     """Renders one result file as markdown.
 
@@ -297,6 +339,11 @@ def render(document: dict, path: Path) -> str:
     )
     lines.append(f"Versions: {versions}.")
     lines.append("")
+
+    lead = headline(document, engines)
+    if lead:
+        lines.append(lead)
+        lines.append("")
 
     if suite == "ingestion":
         lines.append(
@@ -384,7 +431,15 @@ def render(document: dict, path: Path) -> str:
             lines.append(f"| {query.name} | {row} |")
 
     lines.append("")
-    lines.append("Peak resident memory, which is the whole process and includes the data.")
+    lines.append(
+        f"Peak resident memory, which is the whole process and includes the data, "
+        f"and what that is as a multiple of {BASELINE}. Above one is less memory "
+        f"used. This is half of the stated goal rather than a tiebreak between "
+        f"engines that are close on time: a user running a five gigabyte frame on a "
+        f"sixteen gigabyte laptop cares about this number first, because that "
+        f"failure mode ends with a process that was killed rather than with a query "
+        f"that took longer."
+    )
     lines.append("")
     lines.append("| query | " + " | ".join(engines) + " |")
     lines.append("| --- | " + " | ".join("---:" for _ in engines) + " |")
@@ -392,7 +447,7 @@ def render(document: dict, path: Path) -> str:
         keys = {e: document["results"].get(f"{query.name}/{e}") for e in engines}
         if not any(keys.values()) or not comparable(document, query.name, engines):
             continue
-        row = " | ".join(bytes_cell(keys[e]) for e in engines)
+        row = " | ".join(bytes_cell(keys[e], keys.get(BASELINE)) for e in engines)
         lines.append(f"| {query.name} | {row} |")
 
     lines.append("")
