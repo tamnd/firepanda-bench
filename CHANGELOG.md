@@ -4,6 +4,23 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### Peak memory on a machine without a /proc
+
+The firepanda driver read peak resident memory from `/proc/self/status` and CPU time from `/proc/self/stat`. On anything without a `/proc` it reported zero for both and said `ok`. That was written down as a deliberate choice, on the grounds that a machine which cannot report memory can still report time, and it has now been paid for: a run on a Mac produced a result file where the subject engine's entire memory column was zeros, the runner printed `rss 0.00 GB` fifteen times without comment, and nothing in the harness objected. Half of what this repository claims is memory, and a zero that reads as a measurement is worse than a refusal.
+
+`getrusage` is in libc on both platforms and reports the same quantities, so there is one code path now instead of a Linux one and a hole. It is also better than what it replaces on Linux rather than merely equal to it: `/proc/self/stat` reports CPU in USER_HZ ticks, which is ten milliseconds, and `getrusage` reports microseconds, so the caveat about quantizing a two hundred millisecond timed region at ten milliseconds is gone. `ru_maxrss` and `VmHWM` are the same high water mark, so no Linux number moves. The struct is read by byte offset rather than through a declared layout, because the two platforms agree on every offset that matters and differ only in the width of `timeval`'s `tv_usec` and in whether `ru_maxrss` counts bytes or kilobytes, and writing the layout down twice would be the same offsets with more places to get them wrong. `/proc` is still read, for current resident memory and the thread count, which `getrusage` has no field for and which nothing here claims anything about.
+
+`validate-results` now refuses a result that ran and reports no peak memory. A process that ran has a non zero high water mark, so there is no query for which zero is the truth, and the only way to produce one is a probe that did not work. A pairing that did not run still owes nothing but a reason, which is the whole point of publishing refusals rather than dropping the row.
+
+The first numbers this makes possible, db-benchmark at 0.05GB on an M series laptop, firepanda against pandas over all fifteen queries with all four engines agreeing on every answer:
+
+| | median | worst | best |
+| --- | --- | --- | --- |
+| speed | 7.3x | 2.6x | 28.3x |
+| memory | 4.5x | 2.8x | 7.7x |
+
+Against the stated goal of ten times the speed on a tenth of the memory, that is short on both and shorter on memory, and the memory column is worth reading rather than just scoring. firepanda's peak sits between 64 and 211 MB across the fifteen queries where pandas ranges from 287 to 812 MB. The first guess was that the bottom of firepanda's range is fixed runtime cost, and that is wrong: a Mojo binary that does nothing but read its own `getrusage` peaks at 9 MB, so the 64 MB on the join queries is very nearly the data. The 0.05GB dataset is about 50 MB in memory, which means firepanda is holding it in 1.3 times its size and pandas in six times its size. A tenth of pandas at this size would be 31 MB, which is less than the data, so on this suite at this size the memory target is not reachable by any engine that holds its input, and the honest reading of 4.5x is that most of the room pandas leaves has already been taken. The size that would test the claim is one where pandas' overhead rather than the data dominates. 0.05GB is the size a laptop can run, and it is published because it is what was measured.
+
 ### An exact answer check, and the first thing it found
 
 The cross engine fingerprint has been wrong three times and each one is written up in `tools/README.md`. This is a fourth thing it gets wrong, except it is not a bug and cannot be fixed: every part of the fingerprint reduces a column on its own, so it knows the multiset of values in each column and nothing at all about which row each value sits on. Two answers holding the same values paired up differently are identical to it, which is precisely what a join on the wrong key produces. It calls that agreement and always will, because a per column reduction cannot see a permutation across columns, and that property is also why it is cheap enough to sit on the timed path and computable by the Mojo driver without an Arrow sort.

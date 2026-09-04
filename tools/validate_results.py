@@ -91,6 +91,18 @@ def check(path: Path) -> list[str]:
         missing = [k for k in PER_RESULT if k not in entry]
         if missing:
             problems.append(f"result '{name}' missing {', '.join(missing)}")
+        # A process that ran has a non zero high water mark, always, so a zero
+        # here is a probe that did not work rather than a query that used no
+        # memory. It has been possible to publish one: the firepanda driver read
+        # peak memory out of /proc, and on a machine without a /proc it reported
+        # zero and said `ok`, so a run on a Mac produced a file where the subject
+        # engine's memory column was zeros. Half of what this repository claims
+        # is memory. A zero that reads as a measurement is worse than a refusal.
+        if not entry.get("peak_rss_bytes"):
+            problems.append(
+                f"result '{name}' ran and reports no peak memory, which is a probe "
+                "that did not work rather than a query that used none"
+            )
 
     # A disagreement is allowed to be in the file. Publishing it as a comparison
     # is not, and the report is what enforces that, so this only insists the file
