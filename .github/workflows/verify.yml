@@ -1,0 +1,103 @@
+name: Verify answers
+
+# The exact answer check. Every published run compares answers with a fingerprint,
+# which is a row count, the column sums and a digest per text column, and that check
+# cannot see a permutation: two answers with the same multiset of values in every
+# column can still pair the wrong name with the wrong total. This job writes each
+# engine's answer to Arrow IPC after the timing and compares them row by row through
+# the firepanda-compat comparison layer, which can.
+#
+# On a release and on demand, and deliberately not on every pull request. It is slow,
+# it wants disk the size of the answers, and it is checking the engines rather than
+# the harness, so it has nothing to say about a change to a report template. The
+# harness side of it, the parts that can be checked without an engine, is in the
+# unit tests and those do run on every pull request.
+#
+# The sizes are the smallest of each suite. A fingerprint collision does not need a
+# large table to happen on, and a small one keeps this inside a free runner.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Suite to verify
+        type: choice
+        options: [db-benchmark, tpch, ingestion, all]
+        default: all
+      engines:
+        description: Comma-separated engine list
+        type: string
+        default: pandas,polars,duckdb
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ENGINES: ${{ inputs.engines || 'pandas,polars,duckdb' }}
+
+jobs:
+  verify:
+    name: ${{ matrix.suite }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: ${{ (inputs.suite == 'all' || inputs.suite == '') && fromJSON('["db-benchmark","tpch","ingestion"]') || fromJSON(format('["{0}"]', inputs.suite)) }}
+        include:
+          - suite: db-benchmark
+            size: 0.05GB
+          - suite: tpch
+            size: sf1
+          - suite: ingestion
+            size: 1M
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      # The comparison layer is imported from here rather than vendored. Two copies
+      # of the rules about what makes two answers the same answer is two definitions
+      # of correctness, and they would not stay the same for long.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: tamnd/firepanda-compat
+          path: firepanda-compat
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-pixi
+
+      - name: Generate the dataset
+        env:
+          SUITE: ${{ matrix.suite }}
+          SIZE: ${{ matrix.size }}
+        run: pixi run data --suite "$SUITE" --size "$SIZE"
+
+      # One run each. Nothing here is a timing and publishing one taken on a shared
+      # runner would be worse than publishing none, so the run exists to produce the
+      # answers and the check is the output.
+      - name: Run and check every answer exactly
+        env:
+          SUITE: ${{ matrix.suite }}
+          SIZE: ${{ matrix.size }}
+          FIREPANDA_COMPAT: ${{ github.workspace }}/firepanda-compat
+        run: |
+          pixi run bench \
+            --suite "$SUITE" \
+            --size "$SIZE" \
+            --engines "$ENGINES" \
+            --runs 1 \
+            --verify exact \
+            | tee verify.log
+          {
+            echo "## ${SUITE} at ${SIZE}"
+            echo '```'
+            sed -n '/^exact check$/,$p' verify.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

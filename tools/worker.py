@@ -13,6 +13,7 @@ goes to stderr, so a chatty engine cannot corrupt the result.
 Usage:
     python tools/worker.py --engine pandas --query q1 --suite db-benchmark
         --manifest data/db-benchmark/0.5GB/manifest.json --io memory --runs 10
+        [--answer results/answers/db-benchmark/q1/pandas.arrow]
 """
 
 from __future__ import annotations
@@ -25,6 +26,8 @@ import time
 import traceback
 from pathlib import Path
 
+import pyarrow as pa
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import metrics
@@ -35,6 +38,36 @@ import engines
 # Which file format each suite's engines are handed. Everything but ingestion is
 # compared on Parquet, and ingestion is the suite that measures the CSV reader.
 SUITE_FORMAT = {"ingestion": "csv"}
+
+
+def save_answer(answer, path: Path) -> str:
+    """Writes an engine's answer to Arrow IPC so it can be compared exactly later.
+
+    This happens after every timed run has finished and never inside one. The
+    fingerprint is the check that sits on the timed path and this is the check that
+    does not, so writing a gigabyte to disk here cannot move a published number.
+
+    Arrow IPC rather than Parquet, because the point is to hand another process the
+    answer the engine actually produced. Parquet would re-encode it, and a
+    comparison run against a re-encoded copy is a comparison against the encoder.
+
+    Args:
+        answer: Whatever the query returned.
+        path: Where to write it.
+
+    Returns:
+        A note if the answer could not be written, empty otherwise.
+    """
+    try:
+        table = engines.as_arrow(answer)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with pa.ipc.new_file(path, table.schema) as writer:
+            writer.write_table(table)
+    except Exception as exc:
+        # A failure here is not a failed measurement. The timings are already
+        # taken and they are still good, so this reports and does not raise.
+        return f"the answer could not be written for verification: {exc}"
+    return ""
 
 
 def table_paths(
@@ -199,6 +232,7 @@ def run(
     io: str,
     runs: int,
     timeout_s: int,
+    answer_path: Path | None = None,
 ) -> metrics.Measurement:
     """Loads the data, runs the query the requested number of times and measures it.
 
@@ -211,6 +245,8 @@ def run(
             scan the file is allowed to.
         runs: How many times to run the query.
         timeout_s: How long an external engine gets before it is given up on.
+        answer_path: Where to write the answer for the exact check, or None for
+            the usual run, which writes nothing.
 
     Returns:
         The measurement, with `ok` false and a note if anything went wrong.
@@ -248,6 +284,13 @@ def run(
             )
             if external.ok and measurement.note:
                 external.note = measurement.note
+            if answer_path is not None:
+                # An external engine reports numbers over a pipe rather than
+                # handing back a table, so there is nothing here to write. It
+                # abstains from the exact check the same way it abstains from the
+                # text digest, which is reported rather than read as agreement.
+                aside = f"{engine_name} does not write an answer file, so it is not verified"
+                external.note = f"{external.note}; {aside}" if external.note else aside
             return external
         except Exception:
             measurement.note = traceback.format_exc(limit=4).strip().replace("\n", " | ")
@@ -282,6 +325,13 @@ def run(
             )
         measurement.samples = samples
 
+        # Converted once, here, rather than once per thing that wants it. A DuckDB
+        # relation is a stream and reading it a second time yields nothing, so a
+        # digest and an answer file that each called `as_arrow` would produce a
+        # correct digest and an empty answer, which looks exactly like an engine
+        # that returned no rows.
+        answer = engines.as_arrow(answer)
+
         reduce = engines.read_digest if suite == "ingestion" else engines.digest
         rows, cols, checksum, sums, hashes = reduce(answer)
         measurement.rows_out = rows
@@ -296,6 +346,10 @@ def run(
         aside = context.get("note") if isinstance(context, dict) else None
         if aside:
             measurement.note = f"{measurement.note}; {aside}" if measurement.note else aside
+        if answer_path is not None:
+            failed = save_answer(answer, answer_path)
+            if failed:
+                measurement.note = f"{measurement.note}; {failed}" if measurement.note else failed
         measurement.ok = True
     except NotImplementedError as exc:
         measurement.note = str(exc) or f"{engine_name} cannot run {query_name} yet"
@@ -322,6 +376,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--io", default="memory", choices=engines.IO_MODES)
     parser.add_argument("--runs", type=int, default=10)
     parser.add_argument("--timeout", type=int, default=3600)
+    # Off unless asked for. An answer file is the size of the answer, and for the
+    # ingestion suite that is the size of the input, so this is a thing a release
+    # run turns on rather than a thing every run pays for.
+    parser.add_argument("--answer", type=Path, default=None)
     args = parser.parse_args(argv)
 
     measurement = run(
@@ -332,6 +390,7 @@ def main(argv: list[str] | None = None) -> int:
         args.io,
         args.runs,
         args.timeout,
+        args.answer,
     )
     # Written to the real stdout, whatever the engine did to it.
     sys.__stdout__.write(metrics.dump(measurement) + "\n")

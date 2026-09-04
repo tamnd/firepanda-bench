@@ -99,6 +99,29 @@ def check(path: Path) -> list[str]:
         if "agreed" not in verdict or "by_engine" not in verdict:
             problems.append(f"agreement for '{query}' does not say who produced what")
 
+    # Optional, because it is only there when somebody ran with --verify exact.
+    # When it is there it is a much stronger claim than the fingerprint, and a
+    # stronger claim needs to say what it was checked against: a verdict is a
+    # statement about two answers under one definition of sameness, and that
+    # definition is a commit of the compat comparison layer.
+    #
+    # A check that could not run is allowed to be in the file and only owes a
+    # reason, the same deal a pairing that did not run gets.
+    verification = doc.get("verification")
+    if verification is not None:
+        if "agreed" not in verification:
+            problems.append("'verification' does not say whether the answers agreed")
+        if not verification.get("ran"):
+            if not verification.get("note"):
+                problems.append("'verification' did not run and does not say why")
+        else:
+            if "queries" not in verification:
+                problems.append("'verification' ran and names no queries")
+            if not str((verification.get("compat") or {}).get("revision") or "").strip():
+                problems.append(
+                    "'verification' does not name the compat revision it was checked against"
+                )
+
     if doc.get("runs", 0) < 3:
         problems.append(f"runs={doc.get('runs')} is too few to report a median over")
 
