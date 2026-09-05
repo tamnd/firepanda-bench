@@ -87,6 +87,38 @@ def test_a_zero_total_does_not_divide_by_itself():
     assert not run.answers_match(answer("a", 1, {"v": 0.0}), answer("b", 1, {"v": 1.0}))
 
 
+def test_a_not_a_number_agrees_with_nothing_but_itself():
+    """The bug this catches reported a disagreement as agreement for a whole run.
+
+    Every comparison against a not a number is false, so the tolerance test below
+    the check passed whatever it was set beside. firepanda answered q6 with a not
+    a number in the standard deviation column, because its grouped standard
+    deviation returns one for a group too small to have a sample deviation, and
+    this function said it matched pandas, Polars and DuckDB, all three of which
+    had a real number there.
+    """
+    assert not run.answers_match(
+        answer("firepanda", 1, {"v3_sd": float("nan")}),
+        answer("polars", 1, {"v3_sd": 64_701_115.89}),
+    )
+    assert not run.answers_match(
+        answer("polars", 1, {"v3_sd": 64_701_115.89}),
+        answer("firepanda", 1, {"v3_sd": float("nan")}),
+    )
+    assert run.answers_match(
+        answer("a", 1, {"v3_sd": float("nan")}),
+        answer("b", 1, {"v3_sd": float("nan")}),
+    )
+
+
+def test_a_not_a_number_does_not_excuse_the_other_columns():
+    """One column being a not a number on both sides leaves the rest to compare."""
+    assert not run.answers_match(
+        answer("a", 1, {"v3_sd": float("nan"), "v1": 10.0}),
+        answer("b", 1, {"v3_sd": float("nan"), "v1": 11.0}),
+    )
+
+
 def test_text_is_compared_exactly():
     """Two engines that grouped by different string keys have to disagree.
 

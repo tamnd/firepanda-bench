@@ -34,6 +34,7 @@ Usage:
 
 from std.collections.span import Span
 from std.ffi import external_call
+from std.math import isinf, isnan
 from std.sys import argv
 from std.sys.info import CompilationTarget
 from std.time import perf_counter_ns
@@ -653,6 +654,15 @@ def column_sum(ref column: AnyArray) raises -> Float64:
     has to be is obviously correct, because it is what the cross engine agreement
     check is built on.
 
+    A not a number is stepped over, the same as a null. That is not a
+    convenience, it is what makes the comparison like for like: pandas answers a
+    standard deviation over a group of one row with a not a number, and by the
+    time that answer reaches Arrow it is a missing value, so Arrow's own sum
+    steps over it and so does Polars' and DuckDB's, both of which answer null
+    there in the first place. Summing it here instead would turn the whole column
+    into a not a number and report firepanda as disagreeing with three engines
+    that are computing the same thing it is.
+
     Args:
         column: The column.
 
@@ -689,12 +699,12 @@ def column_sum(ref column: AnyArray) raises -> Float64:
     elif dtype == DType.float64:
         var typed = column.as_typed[DType.float64]()
         for i in range(len(typed)):
-            if typed.is_valid(i):
+            if typed.is_valid(i) and not isnan(typed[i]):
                 total += typed[i]
     elif dtype == DType.float32:
         var typed = column.as_typed[DType.float32]()
         for i in range(len(typed)):
-            if typed.is_valid(i):
+            if typed.is_valid(i) and not isnan(Float64(typed[i])):
                 total += Float64(typed[i])
     return total
 
@@ -903,6 +913,34 @@ def flag(name: String, fallback: String) -> String:
     return fallback
 
 
+def json_number(value: Float64) -> String:
+    """Formats a float as a JSON number.
+
+    Mojo prints a not a number as `nan` and an infinity as `inf`, and neither is
+    a token any JSON reader takes. Python's reader accepts `NaN`, `Infinity` and
+    `-Infinity`, which is what the harness on the other end of this pipe uses,
+    and its fingerprint already has a case for a value that is not finite. So
+    the three are spelled the way that reader spells them rather than being
+    turned into nulls, because a query whose answer really is a not a number
+    should disagree with an engine that says otherwise rather than quietly
+    matching it.
+
+    A sample standard deviation over a group of one row is the case that brings
+    this up. It is a not a number in pandas too.
+
+    Args:
+        value: The number.
+
+    Returns:
+        The number, as a JSON token.
+    """
+    if isnan(value):
+        return String("NaN")
+    if isinf(value):
+        return String("Infinity") if value > 0 else String("-Infinity")
+    return String(value)
+
+
 def json_string(value: String) -> String:
     """Quotes a string for JSON.
 
@@ -1039,7 +1077,9 @@ def main() raises:
                 )
             else:
                 sums += String(
-                    json_string(String(names[i], ".sum")), ": ", column_sum(answer[i])
+                    json_string(String(names[i], ".sum")),
+                    ": ",
+                    json_number(column_sum(answer[i])),
                 )
             summed += 1
         elif answer[i].is_string():
@@ -1050,7 +1090,9 @@ def main() raises:
         else:
             if summed > 0:
                 sums += ", "
-            sums += String(json_string(names[i]), ": ", column_sum(answer[i]))
+            sums += String(
+                json_string(names[i]), ": ", json_number(column_sum(answer[i]))
+            )
             summed += 1
     sums += "}"
     hashes += "}"
