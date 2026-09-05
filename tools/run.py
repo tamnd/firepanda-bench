@@ -168,7 +168,8 @@ def answers_match(left: metrics.Measurement, right: metrics.Measurement) -> bool
 
     Returns:
         Whether the row counts are equal, every column sum is within the
-        tolerance, and every text digest is identical.
+        tolerance or is a not a number on both sides, and every text digest is
+        identical.
     """
     if left.rows_out != right.rows_out:
         return False
@@ -176,6 +177,16 @@ def answers_match(left: metrics.Measurement, right: metrics.Measurement) -> bool
         return False
     for name, value in left.sums.items():
         other = right.sums[name]
+        # A not a number first, because every comparison against one is false and
+        # the tolerance test below would therefore pass whatever it was set beside.
+        # That is not a hypothetical: firepanda answered q6 with a not a number in
+        # the standard deviation column and this function reported it as agreeing
+        # with pandas, Polars and DuckDB, all three of which had a real number
+        # there. A not a number matches a not a number and nothing else.
+        if value != value or other != other:
+            if (value != value) != (other != other):
+                return False
+            continue
         scale = max(abs(value), abs(other), 1.0)
         if abs(value - other) > AGREEMENT_TOLERANCE * scale:
             return False
