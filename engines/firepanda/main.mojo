@@ -41,8 +41,10 @@ from std.time import perf_counter_ns
 
 from firepanda.array.any import AnyArray
 from firepanda.array.array import Array
+from firepanda.array.chunked import ChunkedArray
 from firepanda.array.strings import StringArray, StringBuilder
 from firepanda.dtype import Field, LogicalType, Schema
+from firepanda.exec import GroupAgg, Join, Node, Pipeline, Reduce
 from firepanda.frame.frame import DataFrame
 from firepanda.frame.groupby import AggSpec
 from firepanda.frame.series import Series
@@ -265,6 +267,58 @@ def join_left_frame(rows: Int) raises -> DataFrame:
     return DataFrame.from_series(columns^)
 
 
+comptime PROBE_CHUNK_ROWS = 128 * 1024
+"""How many rows of the left join table go in one chunk.
+
+The engine's own chunk size. The left table is generated in one piece and cut up
+here, because a chunk is what an operator is handed, and a source that hands out
+one chunk of ten million rows is a source the driver cannot spread over the
+cores.
+"""
+
+
+def probe_frame(frame: DataFrame, key: String) raises -> DataFrame:
+    """Cuts the two columns a join query reads out of the left table, in chunks.
+
+    The left table has four columns and a join query reads two of them, the key
+    and v1, so the other two are left behind rather than carried through the
+    pipeline for nobody. What comes back is a copy, because a pipeline consumes
+    its source and the driver runs the query ten times over the same table.
+
+    That copy is why this is called before the clock starts rather than inside
+    the query. It is setup, the same way generating the table is setup, and
+    charging it to the join would be measuring the driver.
+
+    Args:
+        frame: The left table, which is left as it was.
+        key: Which key column this query joins on.
+
+    Returns:
+        A two column frame in chunks of `PROBE_CHUNK_ROWS` rows.
+
+    Raises:
+        Error: If the table has not got the columns a join query reads.
+    """
+    var names: List[String] = [key, "v1"]
+    var rows = frame.rows
+    var fields = List[Field]()
+    var columns = List[ChunkedArray](capacity=len(names))
+    for n in range(len(names)):
+        var at = frame.schema.index_of(names[n])
+        var kind = frame.schema[at].dtype
+        fields.append(Field(names[n], kind))
+        var chunks = ChunkedArray(kind)
+        var begin = 0
+        while begin < rows:
+            var stop = begin + PROBE_CHUNK_ROWS
+            if stop > rows:
+                stop = rows
+            chunks.append(frame.columns[at].only().slice(begin, stop))
+            begin = stop
+        columns.append(chunks^)
+    return DataFrame(Schema(fields^), columns^)
+
+
 def join_right_frame(stream: Int, count: Int, key: String) raises -> DataFrame:
     """Builds one right join table.
 
@@ -380,7 +434,12 @@ def keys(name: String) -> List[String]:
     return out^
 
 
-def run_query(query: String, ref tables: Tables) raises -> DataFrame:
+def run_query(
+    query: String,
+    ref tables: Tables,
+    var probe: DataFrame,
+    var built: DataFrame,
+) raises -> DataFrame:
     """Runs one query and returns its answer.
 
     Every answer is materialized, because firepanda is eager and there is nothing
@@ -391,6 +450,11 @@ def run_query(query: String, ref tables: Tables) raises -> DataFrame:
     Args:
         query: The query name.
         tables: The loaded tables.
+        probe: The left join table, already cut down to the columns the query
+            reads and already in chunks. Empty for every query but j1, j2 and
+            j3, which are the three that run as a pipeline.
+        built: The right join table, the copy this run gets to consume. Empty
+            for the same queries `probe` is empty for.
 
     Returns:
         The answer frame.
@@ -495,32 +559,129 @@ def run_query(query: String, ref tables: Tables) raises -> DataFrame:
         return tables.groupby.group_by(by^, specs^, True, False)
 
     if query == "j1":
-        var out = tables.left.join(
-            tables.right, keys("id1"), JoinKind.INNER, "_right", join_output()
-        )
-        return reduce_join(out^)
+        return join_pipeline(probe^, built^, "id1", JoinKind.INNER)
     if query == "j2":
-        var out = tables.left.join(
-            tables.right, keys("id2"), JoinKind.INNER, "_right", join_output()
-        )
-        return reduce_join(out^)
+        return join_pipeline(probe^, built^, "id2", JoinKind.INNER)
     if query == "j3":
-        var out = tables.left.join(
-            tables.right, keys("id2"), JoinKind.LEFT, "_right", join_output()
-        )
-        return reduce_join(out^)
+        return join_pipeline(probe^, built^, "id2", JoinKind.LEFT)
+    # j4 and j5 join the big table against another table of the same height,
+    # and there the pipeline loses. Measured on a 13900K at ten million rows a
+    # side: the whole frame route is a 47.2 ms join and a 3.9 ms reduction,
+    # 51.1 ms, and the pipeline is a 14.5 ms build and a 41.3 to 46.7 ms
+    # streaming probe, 55.8 to 61.2 ms. Two reasons, and the second is the
+    # bigger one. The build side is hashed on one thread before a chunk moves,
+    # and a probe split into seventy seven chunks is slower per row than one
+    # pass over ten million because the table it is probing is forty megabytes
+    # and no chunk of it stays in cache between chunks.
+    #
+    # So which plan wins is decided by how big the build side is, not by which
+    # is newer. That decision belongs in an optimizer, and firepanda has not got
+    # one until M4, so for now it is written down here.
     if query == "j4":
-        var out = tables.left.join(
-            tables.right, keys("id3"), JoinKind.INNER, "_right", join_output()
+        return reduce_join(
+            tables.left.join(
+                tables.right, keys("id3"), JoinKind.INNER, "_right",
+                join_output(),
+            )
         )
-        return reduce_join(out^)
     if query == "j5":
-        var out = tables.left.join(
-            tables.right, keys("id3"), JoinKind.LEFT, "_right", join_output()
+        return reduce_join(
+            tables.left.join(
+                tables.right, keys("id3"), JoinKind.LEFT, "_right",
+                join_output(),
+            )
         )
-        return reduce_join(out^)
 
     raise Error(String("firepanda does not run ", query))
+
+
+def join_key(query: String) raises -> String:
+    """Returns which column one of the streaming join queries joins on.
+
+    Args:
+        query: The query name, one of j1, j2 and j3.
+
+    Returns:
+        The key column name, which both tables call the same thing.
+
+    Raises:
+        Error: If the query is not one that runs as a pipeline.
+    """
+    if query == "j1":
+        return "id1"
+    if query == "j2" or query == "j3":
+        return "id2"
+    raise Error(String(query, " is not a streaming join query"))
+
+
+def join_pipeline(
+    var probe: DataFrame, var built: DataFrame, key: String, kind: JoinKind
+) raises -> DataFrame:
+    """Runs one join query as a pipeline and returns its one row answer.
+
+    The query is a join followed by a reduction, and written this way neither of
+    them ever writes a frame. The join hashes the right table once, then probes
+    a chunk of the left table at a time and gathers v1 and v2 for the rows that
+    matched, and the reduction folds that chunk away on the core that produced
+    it, while it is still in cache. What used to happen was a join that built
+    two columns of ten million rows and a reduction that read them back, which
+    is a hundred and sixty megabytes written and a hundred and sixty read for an
+    answer of three numbers.
+
+    The answer holds the same three numbers in the same order the whole frame
+    version produced, v1, v2 and rows, because the harness fingerprints the
+    answer and a column order that moved would be reported as a disagreement.
+    The count is a size rather than a count, so a row a left join matched
+    nothing on still counts, and the two sums skip their nulls, which is what
+    pandas, polars and DuckDB all do here.
+
+    Args:
+        probe: The left table, in chunks. Consumed.
+        built: The right table. Consumed.
+        key: The column both sides join on.
+        kind: Inner or left.
+
+    Returns:
+        A one row frame holding `v1`, `v2` and `rows`.
+
+    Raises:
+        Error: If the tables have not got the columns the query reads.
+    """
+    var aggs = List[GroupAgg]()
+    aggs.append(GroupAgg(0, AggKind.SUM, "v1"))
+    aggs.append(GroupAgg(1, AggKind.SUM, "v2"))
+    aggs.append(GroupAgg(0, AggKind.SIZE, "rows"))
+    var pipeline = Pipeline(probe^)
+    pipeline.add(Node(Join(built^, key, key, kind, "_right", join_output())))
+    pipeline.add(Node(Reduce(aggs^)))
+    return pipeline^.run()
+
+
+def reduce_join(var joined: DataFrame) raises -> DataFrame:
+    """Reduces a join result to one row of a count and two sums.
+
+    A left join leaves nulls in v2 where nothing matched, and the sum skips them,
+    which is what pandas, polars and DuckDB all do. That is the behaviour the
+    fingerprint is checking, not an accident of this reduction.
+
+    Used by j4 and j5 only. The other three join queries run as a pipeline and
+    fold each chunk as it is produced, which needs no join result to read back.
+
+    Args:
+        joined: The join result.
+
+    Returns:
+        A one row frame with `rows`, `v1` and `v2`.
+    """
+    var height = len(joined)
+    var specs: List[AggSpec] = [
+        AggSpec("v1", AggKind.SUM, "v1"),
+        AggSpec("v2", AggKind.SUM, "v2"),
+    ]
+    var out = joined.agg(specs^)
+    var counts = Array[DType.int64](1)
+    counts[0] = Int64(height)
+    return out.with_column(Series("rows", counts^))
 
 
 def join_output() -> List[String]:
@@ -554,35 +715,6 @@ def join_output() -> List[String]:
     out.append("v1")
     out.append("v2")
     return out^
-
-
-def reduce_join(var joined: DataFrame) raises -> DataFrame:
-    """Reduces a join result to one row of a count and two sums.
-
-    A left join leaves nulls in v2 where nothing matched, and the sum skips them,
-    which is what pandas, polars and DuckDB all do. That is the behaviour the
-    fingerprint is checking, not an accident of this reduction.
-
-    This used to append a column of zeros and group by it, because a whole frame
-    reduction had no spelling. That put 81 ms of hashing into a 34 ms join and
-    made two thirds of every j number measure the harness. polars writes
-    `.select(pl.len(), sum, sum)` here, which is what `agg` now is.
-
-    Args:
-        joined: The join result.
-
-    Returns:
-        A one row frame with `rows`, `v1` and `v2`.
-    """
-    var height = len(joined)
-    var specs: List[AggSpec] = [
-        AggSpec("v1", AggKind.SUM, "v1"),
-        AggSpec("v2", AggKind.SUM, "v2"),
-    ]
-    var out = joined.agg(specs^)
-    var counts = Array[DType.int64](1)
-    counts[0] = Int64(height)
-    return out.with_column(Series("rows", counts^))
 
 
 def narrow_schema() raises -> Schema:
@@ -1012,13 +1144,25 @@ def main() raises:
         # `answer` below destroys it inside the timed region, and on the
         # ingestion files that is gigabytes of free charged to the wrong run.
         answer = DataFrame()
+        # The pipeline consumes its source and the right table it probes, and
+        # this loop runs the same query ten times, so each run needs its own
+        # copy of both. Made here rather than inside the query, because copying
+        # a table is setup and charging it to the join would put eight
+        # milliseconds of memcpy into a twenty millisecond number.
+        var probe = DataFrame()
+        var built = DataFrame()
+        if not reading and (query == "j1" or query == "j2" or query == "j3"):
+            probe = probe_frame(tables.left, join_key(query))
+            built = DataFrame(copy=tables.right)
         var started = perf_counter_ns()
         # A read can fail on the file rather than on the code, which a generated
         # query cannot, so the run is reported as a failure with its reason
         # instead of leaving the harness to explain a driver that printed
         # nothing.
         try:
-            answer = read_one(query, path) if reading else run_query(query, tables)
+            answer = read_one(query, path) if reading else run_query(
+                query, tables, probe^, built^
+            )
         except error:
             failure = String(error)
             break

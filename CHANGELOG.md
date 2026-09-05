@@ -4,6 +4,26 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### The three small side join queries run as a pipeline, and the two big ones do not
+
+j1 through j5 all used to be a whole frame join followed by a reduction over its result. That builds two columns of ten million rows and then reads them back to produce three numbers, which is a hundred and sixty megabytes written and a hundred and sixty read for an answer of one row.
+
+j1, j2 and j3 now run as a `Pipeline` over the left table with a `Join` node and a `Reduce` node behind it. The right table is hashed once, then the driver hands out a chunk of the left table at a time, and each worker probes its chunk, gathers v1 and v2 for the rows that matched, and folds the result into a one row partial before the chunk leaves its cache. Nothing of ten million rows is ever written. The left table is cut down to the two columns a join query reads, and cut into chunks, before the clock starts, because a pipeline consumes its source and the harness runs the same query five times over the same table. That copy is setup in the same sense that generating the table is setup.
+
+j4 and j5 stayed on the whole frame join, and this is a measurement rather than an oversight. Those two join the big table against another table of the same height, and at ten million rows a side on an i9-13900K the whole frame route is a 47.2 ms join and a 3.9 ms reduction while the pipeline is a 14.5 ms build and a 41.3 to 46.7 ms streaming probe. Two reasons and the second is the larger one. The build side is hashed on one thread before a chunk moves, and a probe split into seventy seven chunks is slower per row than one pass over ten million, because the table being probed is forty megabytes and no part of it survives in cache from one chunk to the next. Which plan wins is decided by how big the build side is, and that decision belongs in an optimizer, which firepanda has not got until M4, so for now it is written down in the driver next to the numbers that justify it.
+
+All five queries agree with pandas, polars and DuckDB on the published db-benchmark checksums, unchanged.
+
+Measured at 0.5GB on an i9-13900K against pandas 3.0.5, polars 1.44.1 and DuckDB 1.5.5, five runs each, seconds and peak resident memory.
+
+| query | firepanda | pandas | polars | duckdb |
+| --- | --- | --- | --- | --- |
+| j1 | 0.014 s, 0.45 GB | 0.318 s, 1.17 GB | 0.027 s, 0.75 GB | 0.017 s, 0.74 GB |
+| j2 | 0.015 s, 0.47 GB | 0.348 s, 1.17 GB | 0.028 s, 0.75 GB | 0.021 s, 0.75 GB |
+| j3 | 0.014 s, 0.47 GB | 0.340 s, 1.17 GB | 0.038 s, 0.82 GB | 0.014 s, 0.69 GB |
+| j4 | 0.061 s, 0.78 GB | 1.251 s, 2.55 GB | 0.195 s, 1.57 GB | 0.090 s, 1.42 GB |
+| j5 | 0.055 s, 0.78 GB | 1.475 s, 2.55 GB | 0.237 s, 1.65 GB | 0.084 s, 1.34 GB |
+
 ### Peak memory on a machine without a /proc
 
 The firepanda driver read peak resident memory from `/proc/self/status` and CPU time from `/proc/self/stat`. On anything without a `/proc` it reported zero for both and said `ok`. That was written down as a deliberate choice, on the grounds that a machine which cannot report memory can still report time, and it has now been paid for: a run on a Mac produced a result file where the subject engine's entire memory column was zeros, the runner printed `rss 0.00 GB` fifteen times without comment, and nothing in the harness objected. Half of what this repository claims is memory, and a zero that reads as a measurement is worse than a refusal.
