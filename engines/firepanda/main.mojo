@@ -267,17 +267,41 @@ def join_left_frame(rows: Int) raises -> DataFrame:
     return DataFrame.from_series(columns^)
 
 
-comptime PROBE_CHUNK_ROWS = 128 * 1024
+comptime PROBE_CHUNK_ROWS = 32 * 1024
 """How many rows of the left join table go in one chunk.
 
 The engine's own chunk size. The left table is generated in one piece and cut up
 here, because a chunk is what an operator is handed, and a source that hands out
 one chunk of ten million rows is a source the driver cannot spread over the
 cores.
+
+This was a hundred and twenty eight thousand rows until it was measured, and the
+number it was measured against is worth keeping. On the i9-13900K at ten million
+rows, sweeping the chunk from sixteen thousand to two hundred and fifty six
+thousand gives medians of 6.5, 6.2, 8.8, 14.0 and 16.4 ms on j1, 7.9, 8.4, 11.7,
+15.9 and 17.7 on j2, and 7.8, 7.9, 12.1, 15.3 and 18.1 on j3. So the old default
+was running every join at half speed, and the curve is flat below thirty two
+thousand rather than turning back up, which is what says the answer is a cache
+size and not a task count.
+
+The CPU seconds move with it, 0.90 against 2.26 on j1, so the chunk is not
+buying parallelism it was already getting from having seven hundred chunks. It
+is that a join makes several passes over a chunk, probing the key, bucketing the
+matches and then taking the columns, and the chunk has to still be in this core's
+private cache when the second pass starts. Thirty two thousand rows of a key and
+a value and the ordinals that come out of them is about a megabyte, which fits.
+A hundred and twenty eight thousand is four, which does not, so every pass after
+the first reads the chunk back out of the shared cache.
+
+Peak resident size follows the same curve, 384 MB at thirty two thousand against
+457 at a hundred and twenty eight and 566 at two hundred and fifty six, because
+the intermediates thirty two cores hold at once are all sized by the chunk.
 """
 
 
-def probe_frame(frame: DataFrame, key: String) raises -> DataFrame:
+def probe_frame(
+    frame: DataFrame, key: String, chunk_rows: Int = PROBE_CHUNK_ROWS
+) raises -> DataFrame:
     """Cuts the two columns a join query reads out of the left table, in chunks.
 
     The left table has four columns and a join query reads two of them, the key
@@ -292,9 +316,10 @@ def probe_frame(frame: DataFrame, key: String) raises -> DataFrame:
     Args:
         frame: The left table, which is left as it was.
         key: Which key column this query joins on.
+        chunk_rows: How many rows go in one chunk.
 
     Returns:
-        A two column frame in chunks of `PROBE_CHUNK_ROWS` rows.
+        A two column frame in chunks of `chunk_rows` rows.
 
     Raises:
         Error: If the table has not got the columns a join query reads.
@@ -310,7 +335,7 @@ def probe_frame(frame: DataFrame, key: String) raises -> DataFrame:
         var chunks = ChunkedArray(kind)
         var begin = 0
         while begin < rows:
-            var stop = begin + PROBE_CHUNK_ROWS
+            var stop = begin + chunk_rows
             if stop > rows:
                 stop = rows
             chunks.append(frame.columns[at].only().slice(begin, stop))
@@ -1106,6 +1131,7 @@ def main() raises:
     var runs = Int(flag("runs", "10"))
     var suite = flag("suite", "db-benchmark")
     var path = flag("path", "")
+    var chunk_rows = Int(flag("chunk-rows", String(PROBE_CHUNK_ROWS)))
     var reading = suite == "ingestion"
 
     var before = read_process_facts()
@@ -1152,7 +1178,7 @@ def main() raises:
         var probe = DataFrame()
         var built = DataFrame()
         if not reading and (query == "j1" or query == "j2" or query == "j3"):
-            probe = probe_frame(tables.left, join_key(query))
+            probe = probe_frame(tables.left, join_key(query), chunk_rows)
             built = DataFrame(copy=tables.right)
         var started = perf_counter_ns()
         # A read can fail on the file rather than on the code, which a generated
