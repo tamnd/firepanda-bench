@@ -246,9 +246,18 @@ def q9(ctx: dict) -> pa.Table:
     )
     grouped = grouped.merge(products, on=["id2", "id4"])
     n = grouped["n"].astype("float64")
-    cov = grouped["xy"].astype("float64") - grouped["sx"] * grouped["sy"] / n
-    vx = grouped["sxx"] - grouped["sx"] ** 2 / n
-    vy = grouped["syy"] - grouped["sy"] ** 2 / n
+    # The sums come back in the width of the column they were taken over, which
+    # for v1 and v2 is int32, and arrow arithmetic is checked rather than
+    # wrapping. At a hundred million rows a group holds ten thousand of them, so
+    # the sums are in the tens of thousands and their product is past int32 and
+    # the whole query fails. Every term below is a moment on its way into a
+    # float division, so casting once here costs nothing and is what the other
+    # three engines do internally anyway.
+    sx = grouped["sx"].astype("float64")
+    sy = grouped["sy"].astype("float64")
+    cov = grouped["xy"].astype("float64") - sx * sy / n
+    vx = grouped["sxx"] - sx**2 / n
+    vy = grouped["syy"] - sy**2 / n
     grouped["r2"] = (cov * cov / (vx * vy)).astype("float64")
     return finish(grouped[["id2", "id4", "r2"]])
 
