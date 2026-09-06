@@ -602,6 +602,24 @@ def run_query(
     # So which plan wins is decided by how big the build side is, not by which
     # is newer. That decision belongs in an optimizer, and firepanda has not got
     # one until M4, so for now it is written down here.
+    #
+    # Cutting the chunk to thirty two thousand rows made j1, j2 and j3 twice as
+    # fast, which made this worth asking again, and the answer did not move.
+    # With `--pipeline-j45=1` at ten million rows a side the frame route is 55.9
+    # and 55.5 ms while the pipeline is 62.2, 85.3, 84.1 and 75.7 on j4 and
+    # 58.6, 71.3, 86.1 and 77.7 on j5 for chunks of sixteen, thirty two, sixty
+    # four and a hundred and twenty eight thousand. Every chunk size loses, and
+    # the smallest one loses least, which is the opposite shape from the other
+    # three queries. That is what a build side too big for any cache looks like:
+    # the chunk cannot help because the thing being missed is the table, not the
+    # chunk. The flag stays so this can be asked a third time.
+    # An empty probe means the driver did not prepare one, which is what says
+    # these two are on their default whole frame route.
+    if probe.rows > 0:
+        if query == "j4":
+            return join_pipeline(probe^, built^, "id3", JoinKind.INNER)
+        if query == "j5":
+            return join_pipeline(probe^, built^, "id3", JoinKind.LEFT)
     if query == "j4":
         return reduce_join(
             tables.left.join(
@@ -636,6 +654,8 @@ def join_key(query: String) raises -> String:
         return "id1"
     if query == "j2" or query == "j3":
         return "id2"
+    if query == "j4" or query == "j5":
+        return "id3"
     raise Error(String(query, " is not a streaming join query"))
 
 
@@ -1132,6 +1152,7 @@ def main() raises:
     var suite = flag("suite", "db-benchmark")
     var path = flag("path", "")
     var chunk_rows = Int(flag("chunk-rows", String(PROBE_CHUNK_ROWS)))
+    var pipeline_j45 = flag("pipeline-j45", "0") == "1"
     var reading = suite == "ingestion"
 
     var before = read_process_facts()
@@ -1177,7 +1198,14 @@ def main() raises:
         # milliseconds of memcpy into a twenty millisecond number.
         var probe = DataFrame()
         var built = DataFrame()
-        if not reading and (query == "j1" or query == "j2" or query == "j3"):
+        var streams = query == "j1" or query == "j2" or query == "j3"
+        # j4 and j5 run as a whole frame join by default, for the reason written
+        # out beside them in `run_query`. The flag puts them on the pipeline
+        # instead, which is there so the two routes can be compared again after
+        # something changes rather than being compared once and written down.
+        if pipeline_j45 and (query == "j4" or query == "j5"):
+            streams = True
+        if not reading and streams:
             probe = probe_frame(tables.left, join_key(query), chunk_rows)
             built = DataFrame(copy=tables.right)
         var started = perf_counter_ns()

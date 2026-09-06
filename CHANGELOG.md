@@ -16,6 +16,8 @@ Peak resident memory follows the same curve, 384 MB at the new default against 4
 
 The driver takes a `--chunk-rows=` flag now so the sweep can be repeated without a rebuild. The harness does not pass it, so published numbers always use the default.
 
+Doubling the other three made it worth asking whether j4 and j5 should move onto the pipeline as well, since the reason they are not on it was measured at the old chunk size. They should not. There is a `--pipeline-j45=1` flag now that puts them on it, and at ten million rows a side the whole frame route is 55.9 and 55.5 ms while the pipeline is 62.2, 85.3, 84.1 and 75.7 ms on j4 and 58.6, 71.3, 86.1 and 77.7 ms on j5 across the same four chunk sizes. Every chunk size loses and the smallest loses least, which is the opposite shape from j1, j2 and j3. That is what it looks like when the thing missing cache is the build table rather than the chunk, and it is the reason already written beside those two queries rather than a new one. Both routes produce the same sums to the last digit.
+
 ### The three small side join queries run as a pipeline, and the two big ones do not
 
 j1 through j5 all used to be a whole frame join followed by a reduction over its result. That builds two columns of ten million rows and then reads them back to produce three numbers, which is a hundred and sixty megabytes written and a hundred and sixty read for an answer of one row.
