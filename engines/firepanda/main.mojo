@@ -583,12 +583,13 @@ def run_query(
         ]
         return tables.groupby.group_by(by^, specs^, True, False)
 
-    if query == "j1":
-        return join_pipeline(probe^, built^, "id1", JoinKind.INNER)
-    if query == "j2":
-        return join_pipeline(probe^, built^, "id2", JoinKind.INNER)
-    if query == "j3":
-        return join_pipeline(probe^, built^, "id2", JoinKind.LEFT)
+    if probe.rows > 0:
+        if query == "j1":
+            return join_pipeline(probe^, built^, "id1", JoinKind.INNER)
+        if query == "j2":
+            return join_pipeline(probe^, built^, "id2", JoinKind.INNER)
+        if query == "j3":
+            return join_pipeline(probe^, built^, "id2", JoinKind.LEFT)
     # j4 and j5 join the big table against another table of the same height,
     # and there the pipeline loses. Measured on a 13900K at ten million rows a
     # side: the whole frame route is a 47.2 ms join and a 3.9 ms reduction,
@@ -620,6 +621,45 @@ def run_query(
             return join_pipeline(probe^, built^, "id3", JoinKind.INNER)
         if query == "j5":
             return join_pipeline(probe^, built^, "id3", JoinKind.LEFT)
+    # The other direction, which is what `--frame-j123=1` asks for. j1, j2 and
+    # j3 default to the pipeline, and this is the route they came off, kept so
+    # the two shapes can be compared on the same query rather than argued about.
+    #
+    # The comparison, at ten million rows on an i9-13900K, seven runs, medians:
+    # j1 is 6.9 ms on the pipeline against 18.5 on the whole frame, j2 is 8.2
+    # against 19.3 and j3 is 7.9 against 19.6. So 2.69x, 2.36x and 2.49x, with
+    # peak resident memory 385 MB against 660 and CPU seconds 0.83 against 2.52.
+    # Both routes produce the same sums to the last digit.
+    #
+    # This is worth having as a number rather than as a belief, because it is
+    # not the same claim as the chunk sweep. The sweep compared two chunk sizes
+    # inside the pipeline. This compares the pipeline against the shape a caller
+    # gets from `DataFrame.join`, which walks the whole column once per phase,
+    # probing the key, pairing the matches and gathering the columns, with ten
+    # million rows of intermediate between each pair of phases and nothing
+    # surviving cache. Three times the CPU for the same answer is what that
+    # costs.
+    if query == "j1":
+        return reduce_join(
+            tables.left.join(
+                tables.right, keys("id1"), JoinKind.INNER, "_right",
+                join_output(),
+            )
+        )
+    if query == "j2":
+        return reduce_join(
+            tables.left.join(
+                tables.right, keys("id2"), JoinKind.INNER, "_right",
+                join_output(),
+            )
+        )
+    if query == "j3":
+        return reduce_join(
+            tables.left.join(
+                tables.right, keys("id2"), JoinKind.LEFT, "_right",
+                join_output(),
+            )
+        )
     if query == "j4":
         return reduce_join(
             tables.left.join(
@@ -1153,6 +1193,7 @@ def main() raises:
     var path = flag("path", "")
     var chunk_rows = Int(flag("chunk-rows", String(PROBE_CHUNK_ROWS)))
     var pipeline_j45 = flag("pipeline-j45", "0") == "1"
+    var frame_j123 = flag("frame-j123", "0") == "1"
     var reading = suite == "ingestion"
 
     var before = read_process_facts()
@@ -1198,7 +1239,9 @@ def main() raises:
         # milliseconds of memcpy into a twenty millisecond number.
         var probe = DataFrame()
         var built = DataFrame()
-        var streams = query == "j1" or query == "j2" or query == "j3"
+        var streams = not frame_j123 and (
+            query == "j1" or query == "j2" or query == "j3"
+        )
         # j4 and j5 run as a whole frame join by default, for the reason written
         # out beside them in `run_query`. The flag puts them on the pipeline
         # instead, which is there so the two routes can be compared again after
