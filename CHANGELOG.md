@@ -4,6 +4,20 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### The driver was handing the join a chunk four times too big, and it cost half the speed
+
+The three pipelined join queries cut the left table into chunks of a hundred and twenty eight thousand rows before the clock starts. That number was picked because it is the number firepanda's own morsel scheduler uses and it was never measured here. Measuring it says it was the wrong number by a factor of four.
+
+Sweeping the chunk on an i9-13900K at ten million rows gives medians of 6.5, 6.2, 8.8, 14.0 and 16.4 ms on j1 for chunks of sixteen, thirty two, sixty four, a hundred and twenty eight and two hundred and fifty six thousand rows. j2 gives 7.9, 8.4, 11.7, 15.9 and 17.7 and j3 gives 7.8, 7.9, 12.1, 15.3 and 18.1. The default is now thirty two thousand rows, which makes j1 2.25x faster than it was, j2 2.00x and j3 1.97x, with no change to any answer.
+
+The CPU seconds move with the wall clock, 0.90 against 2.26 on j1, so this is not a chunk count that was starving the cores. Seven hundred and sixty chunks was already enough to keep thirty two of them busy. It is that a join makes several passes over each chunk, probing the key, bucketing the matches and then gathering the columns, and a chunk has to still be in the core's private cache when the second pass starts. Thirty two thousand rows of a key, a value and the ordinals in between is about a megabyte and fits in an L2. A hundred and twenty eight thousand rows is four megabytes and does not.
+
+Peak resident memory follows the same curve, 384 MB at the new default against 457 MB at the old one and 566 MB at twice that, because every intermediate the thirty two workers hold at once is sized by the chunk.
+
+The driver takes a `--chunk-rows=` flag now so the sweep can be repeated without a rebuild. The harness does not pass it, so published numbers always use the default.
+
+Doubling the other three made it worth asking whether j4 and j5 should move onto the pipeline as well, since the reason they are not on it was measured at the old chunk size. They should not. There is a `--pipeline-j45=1` flag now that puts them on it, and at ten million rows a side the whole frame route is 55.9 and 55.5 ms while the pipeline is 62.2, 85.3, 84.1 and 75.7 ms on j4 and 58.6, 71.3, 86.1 and 77.7 ms on j5 across the same four chunk sizes. Every chunk size loses and the smallest loses least, which is the opposite shape from j1, j2 and j3. That is what it looks like when the thing missing cache is the build table rather than the chunk, and it is the reason already written beside those two queries rather than a new one. Both routes produce the same sums to the last digit.
+
 ### The three small side join queries run as a pipeline, and the two big ones do not
 
 j1 through j5 all used to be a whole frame join followed by a reduction over its result. That builds two columns of ten million rows and then reads them back to produce three numbers, which is a hundred and sixty megabytes written and a hundred and sixty read for an answer of one row.

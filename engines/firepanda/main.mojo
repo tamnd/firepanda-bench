@@ -267,17 +267,41 @@ def join_left_frame(rows: Int) raises -> DataFrame:
     return DataFrame.from_series(columns^)
 
 
-comptime PROBE_CHUNK_ROWS = 128 * 1024
+comptime PROBE_CHUNK_ROWS = 32 * 1024
 """How many rows of the left join table go in one chunk.
 
 The engine's own chunk size. The left table is generated in one piece and cut up
 here, because a chunk is what an operator is handed, and a source that hands out
 one chunk of ten million rows is a source the driver cannot spread over the
 cores.
+
+This was a hundred and twenty eight thousand rows until it was measured, and the
+number it was measured against is worth keeping. On the i9-13900K at ten million
+rows, sweeping the chunk from sixteen thousand to two hundred and fifty six
+thousand gives medians of 6.5, 6.2, 8.8, 14.0 and 16.4 ms on j1, 7.9, 8.4, 11.7,
+15.9 and 17.7 on j2, and 7.8, 7.9, 12.1, 15.3 and 18.1 on j3. So the old default
+was running every join at half speed, and the curve is flat below thirty two
+thousand rather than turning back up, which is what says the answer is a cache
+size and not a task count.
+
+The CPU seconds move with it, 0.90 against 2.26 on j1, so the chunk is not
+buying parallelism it was already getting from having seven hundred chunks. It
+is that a join makes several passes over a chunk, probing the key, bucketing the
+matches and then taking the columns, and the chunk has to still be in this core's
+private cache when the second pass starts. Thirty two thousand rows of a key and
+a value and the ordinals that come out of them is about a megabyte, which fits.
+A hundred and twenty eight thousand is four, which does not, so every pass after
+the first reads the chunk back out of the shared cache.
+
+Peak resident size follows the same curve, 384 MB at thirty two thousand against
+457 at a hundred and twenty eight and 566 at two hundred and fifty six, because
+the intermediates thirty two cores hold at once are all sized by the chunk.
 """
 
 
-def probe_frame(frame: DataFrame, key: String) raises -> DataFrame:
+def probe_frame(
+    frame: DataFrame, key: String, chunk_rows: Int = PROBE_CHUNK_ROWS
+) raises -> DataFrame:
     """Cuts the two columns a join query reads out of the left table, in chunks.
 
     The left table has four columns and a join query reads two of them, the key
@@ -292,9 +316,10 @@ def probe_frame(frame: DataFrame, key: String) raises -> DataFrame:
     Args:
         frame: The left table, which is left as it was.
         key: Which key column this query joins on.
+        chunk_rows: How many rows go in one chunk.
 
     Returns:
-        A two column frame in chunks of `PROBE_CHUNK_ROWS` rows.
+        A two column frame in chunks of `chunk_rows` rows.
 
     Raises:
         Error: If the table has not got the columns a join query reads.
@@ -310,7 +335,7 @@ def probe_frame(frame: DataFrame, key: String) raises -> DataFrame:
         var chunks = ChunkedArray(kind)
         var begin = 0
         while begin < rows:
-            var stop = begin + PROBE_CHUNK_ROWS
+            var stop = begin + chunk_rows
             if stop > rows:
                 stop = rows
             chunks.append(frame.columns[at].only().slice(begin, stop))
@@ -577,6 +602,24 @@ def run_query(
     # So which plan wins is decided by how big the build side is, not by which
     # is newer. That decision belongs in an optimizer, and firepanda has not got
     # one until M4, so for now it is written down here.
+    #
+    # Cutting the chunk to thirty two thousand rows made j1, j2 and j3 twice as
+    # fast, which made this worth asking again, and the answer did not move.
+    # With `--pipeline-j45=1` at ten million rows a side the frame route is 55.9
+    # and 55.5 ms while the pipeline is 62.2, 85.3, 84.1 and 75.7 on j4 and
+    # 58.6, 71.3, 86.1 and 77.7 on j5 for chunks of sixteen, thirty two, sixty
+    # four and a hundred and twenty eight thousand. Every chunk size loses, and
+    # the smallest one loses least, which is the opposite shape from the other
+    # three queries. That is what a build side too big for any cache looks like:
+    # the chunk cannot help because the thing being missed is the table, not the
+    # chunk. The flag stays so this can be asked a third time.
+    # An empty probe means the driver did not prepare one, which is what says
+    # these two are on their default whole frame route.
+    if probe.rows > 0:
+        if query == "j4":
+            return join_pipeline(probe^, built^, "id3", JoinKind.INNER)
+        if query == "j5":
+            return join_pipeline(probe^, built^, "id3", JoinKind.LEFT)
     if query == "j4":
         return reduce_join(
             tables.left.join(
@@ -611,6 +654,8 @@ def join_key(query: String) raises -> String:
         return "id1"
     if query == "j2" or query == "j3":
         return "id2"
+    if query == "j4" or query == "j5":
+        return "id3"
     raise Error(String(query, " is not a streaming join query"))
 
 
@@ -1106,6 +1151,8 @@ def main() raises:
     var runs = Int(flag("runs", "10"))
     var suite = flag("suite", "db-benchmark")
     var path = flag("path", "")
+    var chunk_rows = Int(flag("chunk-rows", String(PROBE_CHUNK_ROWS)))
+    var pipeline_j45 = flag("pipeline-j45", "0") == "1"
     var reading = suite == "ingestion"
 
     var before = read_process_facts()
@@ -1151,8 +1198,15 @@ def main() raises:
         # milliseconds of memcpy into a twenty millisecond number.
         var probe = DataFrame()
         var built = DataFrame()
-        if not reading and (query == "j1" or query == "j2" or query == "j3"):
-            probe = probe_frame(tables.left, join_key(query))
+        var streams = query == "j1" or query == "j2" or query == "j3"
+        # j4 and j5 run as a whole frame join by default, for the reason written
+        # out beside them in `run_query`. The flag puts them on the pipeline
+        # instead, which is there so the two routes can be compared again after
+        # something changes rather than being compared once and written down.
+        if pipeline_j45 and (query == "j4" or query == "j5"):
+            streams = True
+        if not reading and streams:
+            probe = probe_frame(tables.left, join_key(query), chunk_rows)
             built = DataFrame(copy=tables.right)
         var started = perf_counter_ns()
         # A read can fail on the file rather than on the code, which a generated
