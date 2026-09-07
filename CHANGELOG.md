@@ -4,6 +4,14 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### What the whole frame join shape costs, measured rather than assumed
+
+j1, j2 and j3 run as a pipeline and j4 and j5 run as a whole frame join, and until now there was no number for what the difference is worth on the same query. There is a `--frame-j123=1` flag now that puts the first three back on the route they came off, so both shapes can be run against the same data and the same answer.
+
+At ten million rows on an i9-13900K, seven runs each, medians: j1 is 6.9 ms on the pipeline against 18.5 ms on the whole frame, j2 is 8.2 against 19.3, and j3 is 7.9 against 19.6. That is 2.69x, 2.36x and 2.49x. Peak resident memory is 385 MB against 660 and CPU seconds are 0.83 against 2.52. Both routes produce identical sums.
+
+The reason to have this as a number is that it is a different claim from the chunk sweep below. The sweep compares two chunk sizes inside the pipeline. This compares the pipeline against the shape a caller gets from `DataFrame.join`, which walks the whole column once per phase, probing the key, then pairing the matches, then gathering the columns, with ten million rows of intermediate between each pair and nothing surviving cache from one phase to the next. Three times the CPU for the same answer is what that shape costs, and that is a firepanda number rather than a harness one.
+
 ### The driver was handing the join a chunk four times too big, and it cost half the speed
 
 The three pipelined join queries cut the left table into chunks of a hundred and twenty eight thousand rows before the clock starts. That number was picked because it is the number firepanda's own morsel scheduler uses and it was never measured here. Measuring it says it was the wrong number by a factor of four.
