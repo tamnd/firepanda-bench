@@ -145,6 +145,27 @@ SQL = {
         'SELECT count(*) AS "rows", sum(l.v1) AS v1, sum(r.v2) AS v2 '
         'FROM "left" l JOIN right_medium r USING (id2)'
     ),
+    # j3 is j2 with the join made outer, and on this data that changes nothing
+    # about the answer: id2 is uniform over one to a million on both sides, every
+    # left row matches, and the two queries return the same hundred million rows
+    # and the same two sums to the last digit. They do not take the same time.
+    # On a 13900K at 5GB the inner join is 0.386 to 0.474 s and the outer is
+    # 0.167 to 0.217, which is backwards.
+    #
+    # EXPLAIN ANALYZE says why, and it is worth knowing before reading the j2
+    # row as a firepanda win. The inner plan pushes a dynamic filter into the
+    # left table scan, `optional: id2>=1 AND id2<=1000000`, built from the build
+    # side's minimum and maximum. The outer plan has none, because an outer join
+    # cannot drop probe rows so there is nothing to push down. That filter is
+    # usually a good idea and here it rejects nothing at all, so it is a hundred
+    # million comparisons for no rows saved: the scan goes from 0.61 to 0.83
+    # cumulative thread seconds and the join operator from 5.53 to 12.11.
+    #
+    # So DuckDB's honest cost for a join of this shape is the outer number, and
+    # any engine compared against the inner one is being compared against a plan
+    # DuckDB pessimized itself. Nothing is changed here to work around it. The
+    # query is what upstream runs and rewriting it to dodge another engine's
+    # optimizer would be a worse kind of unfair than reporting it.
     "j3": (
         'SELECT count(*) AS "rows", sum(l.v1) AS v1, sum(r.v2) AS v2 '
         'FROM "left" l LEFT JOIN right_medium r USING (id2)'
