@@ -140,7 +140,12 @@ def test_the_crash_gate_catches_a_broken_scan_mode():
 
 
 def test_low_coverage_is_flagged():
-    """Eight of fifteen queries is a result about eight queries."""
+    """Three of sixteen queries is a result about three queries.
+
+    Sixteen is the db-benchmark suite, ten group by and six join. It moved from
+    fifteen when the character join went in, and if it moves again this is the
+    assertion that will say so.
+    """
     results = {}
     for index in range(1, 4):
         results[f"q{index}/firepanda"] = {
@@ -149,4 +154,4 @@ def test_low_coverage_is_flagged():
             "peak_rss_bytes": 100,
         }
         results[f"q{index}/pandas"] = {"ok": True, "median_s": 1.0, "peak_rss_bytes": 100}
-    assert any("ran 3 of 15" in c for c in check_sweep.review(_document(results)))
+    assert any("ran 3 of 16" in c for c in check_sweep.review(_document(results)))

@@ -106,6 +106,7 @@ DECLARED: dict[tuple[str, str], tuple[str, ...]] = {
     ("db-benchmark", "j3"): ("DataFrame.merge", "Series.sum"),
     ("db-benchmark", "j4"): ("DataFrame.merge", "Series.sum"),
     ("db-benchmark", "j5"): ("DataFrame.merge", "Series.sum"),
+    ("db-benchmark", "j6"): ("DataFrame.merge", "Series.sum"),
     ("tpch", "q1"): ("DataFrame.groupby", "GroupBy.agg", "GroupBy.sum", "GroupBy.mean"),
     ("tpch", "q2"): (
         "DataFrame.merge",

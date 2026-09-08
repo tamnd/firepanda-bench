@@ -149,11 +149,16 @@ SQL = {
         'SELECT count(*) AS "rows", sum(l.v1) AS v1, sum(r.v2) AS v2 '
         'FROM "left" l LEFT JOIN right_medium r USING (id2)'
     ),
+    # j4 is j2 on the character key, which is the one join upstream runs on text.
     "j4": (
+        'SELECT count(*) AS "rows", sum(l.v1) AS v1, sum(r.v2) AS v2 '
+        'FROM "left" l JOIN right_medium r USING (id5)'
+    ),
+    "j5": (
         'SELECT count(*) AS "rows", sum(l.v1) AS v1, sum(r.v2) AS v2 '
         'FROM "left" l JOIN right_big r USING (id3)'
     ),
-    "j5": (
+    "j6": (
         'SELECT count(*) AS "rows", sum(l.v1) AS v1, sum(r.v2) AS v2 '
         'FROM "left" l LEFT JOIN right_big r USING (id3)'
     ),

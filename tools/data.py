@@ -190,6 +190,20 @@ def generate_join_tables(rows: int, seed: int = 0x243F6A8885A308D3) -> dict[str,
     hundredth and the full size of it, because what a join costs depends far more
     on the shape of the right side than on the left.
 
+    Every key comes in two forms. id1, id2 and id3 are the integer draws and id4,
+    id5 and id6 are those same three values written as text, which is the shape
+    the upstream generator builds and the reason its fourth query can join on a
+    character key while the other four join on an integer. Note that the naming
+    runs the other way round from the group by table, where id1 through id3 are
+    the character columns. That is upstream's doing rather than a slip here, and
+    reproducing it is what lets a number from this suite be read next to a
+    published one.
+
+    Because id4 is id1 rendered, a query on id4 pairs exactly the same rows as
+    the same query on id1. So the text and integer joins on the same table are a
+    measurement of the key machinery and of nothing else, which is the same
+    property the group by table has.
+
     Args:
         rows: How many rows in the left table.
         seed: The generator seed.
@@ -203,11 +217,21 @@ def generate_join_tables(rows: int, seed: int = 0x243F6A8885A308D3) -> dict[str,
     def stream(index: int) -> np.ndarray:
         return splitmix64(seed ^ 0x5DEECE66D, rows, skip=index * rows)
 
+    # Named rather than inlined, because the text columns are these same arrays
+    # rendered and drawing them twice would be both slower and a chance to draw
+    # them differently.
+    id1 = _below(stream(0), small) + 1
+    id2 = _below(stream(1), medium) + 1
+    id3 = _below(stream(2), rows) + 1
+
     left = pa.table(
         {
-            "id1": pa.array(_below(stream(0), small) + 1, type=pa.int32()),
-            "id2": pa.array(_below(stream(1), medium) + 1, type=pa.int32()),
-            "id3": pa.array(_below(stream(2), rows) + 1, type=pa.int32()),
+            "id1": pa.array(id1, type=pa.int32()),
+            "id2": pa.array(id2, type=pa.int32()),
+            "id3": pa.array(id3, type=pa.int32()),
+            "id4": pa.array(_as_key_text(id1)),
+            "id5": pa.array(_as_key_text(id2)),
+            "id6": pa.array(_as_key_text(id3)),
             "v1": pa.array(
                 (stream(3) >> np.uint64(11)).astype(np.float64) / float(1 << 53) * 100.0,
                 type=pa.float64(),
@@ -215,14 +239,20 @@ def generate_join_tables(rows: int, seed: int = 0x243F6A8885A308D3) -> dict[str,
         }
     )
 
-    def right(index: int, count: int, key: str) -> pa.Table:
+    def right(index: int, count: int, key: str, text_key: str) -> pa.Table:
         # An explicit stream index rather than a hash of the name. Python's string
         # hash is salted per process, so a name derived offset would generate a
         # different dataset on every run and nothing would be reproducible.
         words = splitmix64(seed ^ 0x9E3779B9, count, skip=index * count)
+        dense = np.arange(1, count + 1, dtype=np.int32)
+        # Only the one key each right table is joined on, and its text twin.
+        # Upstream carries every key smaller than the table's own on each right
+        # side, and none of the five queries reads them, so they are left out
+        # here. Every engine is handed the same columns either way.
         return pa.table(
             {
-                key: pa.array(np.arange(1, count + 1, dtype=np.int32)),
+                key: pa.array(dense),
+                text_key: pa.array(_as_key_text(dense)),
                 "v2": pa.array(
                     (words >> np.uint64(11)).astype(np.float64) / float(1 << 53) * 100.0,
                     type=pa.float64(),
@@ -232,10 +262,28 @@ def generate_join_tables(rows: int, seed: int = 0x243F6A8885A308D3) -> dict[str,
 
     return {
         "left": left,
-        "right_small": right(0, small, "id1"),
-        "right_medium": right(1, medium, "id2"),
-        "right_big": right(2, rows, "id3"),
+        "right_small": right(0, small, "id1", "id4"),
+        "right_medium": right(1, medium, "id2", "id5"),
+        "right_big": right(2, rows, "id3", "id6"),
     }
+
+
+def _as_key_text(values: np.ndarray) -> np.ndarray:
+    """Renders an integer key column the way the upstream join generator does.
+
+    That is `sprintf("id%.0f", x)`, so the value keeps its one based numbering
+    and the text is the integer with a prefix rather than an independent draw.
+    The longest of these at a hundred million rows is "id100000000", which is
+    eleven bytes, so no engine that holds short strings inline has to allocate
+    for them.
+
+    Args:
+        values: The integer key column.
+
+    Returns:
+        The same values as text.
+    """
+    return np.char.add("id", values.astype(str))
 
 
 def _digits(count: int) -> np.ndarray:
