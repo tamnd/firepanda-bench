@@ -547,7 +547,7 @@ def run_query(
         tables: The loaded tables.
         probe: The left join table, already cut down to the columns the query
             reads and already in chunks. Empty for every query but j1, j2 and
-            j3, which are the three that run as a pipeline.
+            j3, which are the three that run as a pipeline by default.
         built: The right join table, the copy this run gets to consume. Empty
             for the same queries `probe` is empty for.
 
@@ -689,6 +689,8 @@ def run_query(
     # An empty probe means the driver did not prepare one, which is what says
     # these two are on their default whole frame route.
     if probe.rows > 0:
+        if query == "j4":
+            return join_pipeline(probe^, built^, "id5", JoinKind.INNER)
         if query == "j5":
             return join_pipeline(probe^, built^, "id3", JoinKind.INNER)
         if query == "j6":
@@ -732,12 +734,29 @@ def run_query(
                 join_output(),
             )
         )
-    # j4 is j2 on the character key and it has no pipeline route to default to.
-    # The `Join` node refuses a text key, because pairing one needs the ordinal
-    # space that concatenating both key columns builds and a stream has only one
-    # of them at a time. So this is the whole frame route by necessity rather
-    # than by measurement, and it is the reason j4 is slower than j2 by more
-    # than the key type alone would explain.
+    # j4 on the whole frame route, which is its default and used to be the only
+    # thing it could do, because the `Join` node refused a text key. It does not
+    # any more, and j4 still defaults to this, which is a measurement rather than
+    # a limit.
+    #
+    # At a hundred million rows the build side is a million text keys. The table
+    # is sixteen bytes a slot at half load, thirty two megabytes, and the kept
+    # view per ordinal is sixteen more, so forty eight megabytes against a
+    # thirty six megabyte L3. Nothing stays warm between chunks and the pipeline
+    # loses: 0.30 s on the whole frame against 0.37 at the best chunk size out of
+    # 8K, 16K, 64K and 256K, with 21.5 CPU seconds against 28.4. Peak memory goes
+    # the other way, 10.80 GB against 9.56.
+    #
+    # At ten million rows the build side is a hundred thousand keys, the table
+    # and the views are about five megabytes together, and the same comparison
+    # turns over: six pipeline medians between 17.6 and 20.9 ms against six whole
+    # frame medians between 25.3 and 25.9, with 2.1 CPU seconds against 2.8. So
+    # this is not a route that is worse, it is a route whose build side has to
+    # fit in cache, which is the same thing j5 and j6 say and the reason they are
+    # here too.
+    #
+    # Which one to pick is a build side size question and belongs in an
+    # optimizer. `--pipeline-j45=1` reaches this query as well as those two.
     if query == "j4":
         return reduce_join(
             tables.left.join(
@@ -766,11 +785,8 @@ def run_query(
 def join_key(query: String) raises -> String:
     """Returns which column one of the streaming join queries joins on.
 
-    j4 is not here and cannot be. It joins on a character key and the `Join` node
-    refuses one, so there is no pipeline for it to have a key for.
-
     Args:
-        query: The query name, one of j1, j2, j3, j5 and j6.
+        query: The query name, one of j1, j2, j3, j4, j5 and j6.
 
     Returns:
         The key column name, which both tables call the same thing.
@@ -782,6 +798,8 @@ def join_key(query: String) raises -> String:
         return "id1"
     if query == "j2" or query == "j3":
         return "id2"
+    if query == "j4":
+        return "id5"
     if query == "j5" or query == "j6":
         return "id3"
     raise Error(String(query, " is not a streaming join query"))
@@ -837,9 +855,9 @@ def reduce_join(var joined: DataFrame) raises -> DataFrame:
     which is what pandas, polars and DuckDB all do. That is the behaviour the
     fingerprint is checking, not an accident of this reduction.
 
-    Used by j4, j5 and j6 only. The other three join queries run as a pipeline
-    and fold each chunk as it is produced, which needs no join result to read
-    back.
+    Used by j4, j5 and j6, and by the other three when `--frame-j123=1` takes
+    them off the pipeline. A pipeline folds each chunk as it is produced, which
+    needs no join result to read back.
 
     Args:
         joined: The join result.
@@ -1331,17 +1349,15 @@ def main() raises:
         var streams = not frame_j123 and (
             query == "j1" or query == "j2" or query == "j3"
         )
-        # j5 and j6, the two big joins, run as a whole frame join by default for
-        # the reason written out beside them in `run_query`. The flag puts them
-        # on the pipeline instead, which is there so the two routes can be
-        # compared again after something changes rather than being compared once
-        # and written down. The flag keeps its name from when those two queries
-        # were numbered j4 and j5.
-        #
-        # j4 is not in this list and the flag does not reach it. It joins on a
-        # character key and the `Join` node refuses one, so there is no pipeline
-        # route for it to be put on.
-        if pipeline_j45 and (query == "j5" or query == "j6"):
+        # j4, j5 and j6 run as a whole frame join by default for the reasons
+        # written out beside them in `run_query`. The flag puts them on the
+        # pipeline instead, which is there so the two routes can be compared
+        # again after something changes rather than being compared once and
+        # written down. The flag keeps its name from when the two big joins were
+        # numbered j4 and j5, and it reached only them.
+        if pipeline_j45 and (
+            query == "j4" or query == "j5" or query == "j6"
+        ):
             streams = True
         if not reading and streams:
             probe = probe_frame(tables.left, join_key(query), chunk_rows)
