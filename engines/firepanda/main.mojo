@@ -195,6 +195,40 @@ def text_column(
     return builder^.finish()
 
 
+def key_text_column(
+    seed: UInt64, stream: Int, rows: Int, bound: Int
+) -> StringArray:
+    """Builds the text twin of a `bounded_column`.
+
+    The join table's id4, id5 and id6 are id1, id2 and id3 written out, so this
+    draws the same stream with the same bound and the same one based numbering
+    and puts "id" in front. Not `text_column`, which is the group by table's
+    form and leaves the one off, because the two generators differ there and the
+    difference is a whole column of values that would fail the agreement check.
+
+    The stream is drawn a second time rather than the integer column being
+    handed over, which costs a multiply and a shift per row at build time and
+    keeps the two columns defined by the same expression rather than by a
+    promise that they were built together.
+
+    Args:
+        seed: The stream seed.
+        stream: Which stream, counted in whole columns.
+        rows: How many rows.
+        bound: The number of distinct values.
+
+    Returns:
+        A string column of "id1" through "id" and `bound`.
+    """
+    var builder = StringBuilder(rows)
+    var skip = stream * rows
+    var divisor = UInt64(bound)
+    for i in range(rows):
+        var value = String("id", Int(word(seed, skip, i) % divisor) + 1)
+        builder.append(value.as_bytes())
+    return builder^.finish()
+
+
 def sequence_column(count: Int) -> Array[DType.int32]:
     """Builds the one through n key column a right join table has.
 
@@ -208,6 +242,22 @@ def sequence_column(count: Int) -> Array[DType.int32]:
     for i in range(count):
         out[i] = Int32(i + 1)
     return out^
+
+
+def sequence_text_column(count: Int) -> StringArray:
+    """Builds the text twin of a `sequence_column`.
+
+    Args:
+        count: How many rows.
+
+    Returns:
+        A string column of "id1" through "id" and `count`.
+    """
+    var builder = StringBuilder(count)
+    for i in range(count):
+        var value = String("id", i + 1)
+        builder.append(value.as_bytes())
+    return builder^.finish()
 
 
 def groupby_frame(rows: Int) raises -> DataFrame:
@@ -244,7 +294,15 @@ def groupby_frame(rows: Int) raises -> DataFrame:
 
 
 def join_left_frame(rows: Int) raises -> DataFrame:
-    """Builds the large left join table.
+    """Builds the large left join table, all seven columns of it.
+
+    id4, id5 and id6 are built for every join query even though only j4 reads
+    one of them, for the same reason `groupby_frame` builds its string keys
+    unconditionally. pandas, polars and DuckDB each read the whole parquet file
+    with no projection, so a firepanda that generated four columns for j1 would
+    be reported as holding a third of what three other engines were asked to
+    hold, and the peak memory column would be measuring the driver rather than
+    the engine.
 
     Args:
         rows: How many rows.
@@ -262,6 +320,9 @@ def join_left_frame(rows: Int) raises -> DataFrame:
         Series("id1", bounded_column(JOIN_SEED, 0, rows, small)),
         Series("id2", bounded_column(JOIN_SEED, 1, rows, medium)),
         Series("id3", bounded_column(JOIN_SEED, 2, rows, rows)),
+        Series("id4", key_text_column(JOIN_SEED, 0, rows, small)),
+        Series("id5", key_text_column(JOIN_SEED, 1, rows, medium)),
+        Series("id6", key_text_column(JOIN_SEED, 2, rows, rows)),
         Series("v1", uniform_column(JOIN_SEED, 3, rows, False)),
     ]
     return DataFrame.from_series(columns^)
@@ -344,7 +405,9 @@ def probe_frame(
     return DataFrame(Schema(fields^), columns^)
 
 
-def join_right_frame(stream: Int, count: Int, key: String) raises -> DataFrame:
+def join_right_frame(
+    stream: Int, count: Int, key: String, text_key: String
+) raises -> DataFrame:
     """Builds one right join table.
 
     The key is a dense one through n, so every right row is distinct and the join
@@ -354,13 +417,15 @@ def join_right_frame(stream: Int, count: Int, key: String) raises -> DataFrame:
     Args:
         stream: Which stream, which is 0, 1 and 2 for the three tables.
         count: How many rows.
-        key: The key column name.
+        key: The integer key column name.
+        text_key: The name of the same key written as text.
 
     Returns:
         The frame.
     """
     var columns: List[Series] = [
         Series(key, sequence_column(count)),
+        Series(text_key, sequence_text_column(count)),
         Series("v2", uniform_column(RIGHT_SEED, stream, count, False)),
     ]
     return DataFrame.from_series(columns^)
@@ -430,17 +495,22 @@ def load(query: String, rows: Int) raises -> Tables:
         return Tables(groupby_frame(rows), DataFrame(), DataFrame())
     if query == "j1":
         return Tables(
-            DataFrame(), join_left_frame(rows), join_right_frame(0, small, "id1")
+            DataFrame(),
+            join_left_frame(rows),
+            join_right_frame(0, small, "id1", "id4"),
         )
-    if query == "j2" or query == "j3":
+    # j4 is j2 on the character key, so it reads the same pair of tables.
+    if query == "j2" or query == "j3" or query == "j4":
         return Tables(
             DataFrame(),
             join_left_frame(rows),
-            join_right_frame(1, medium, "id2"),
+            join_right_frame(1, medium, "id2", "id5"),
         )
-    if query == "j4" or query == "j5":
+    if query == "j5" or query == "j6":
         return Tables(
-            DataFrame(), join_left_frame(rows), join_right_frame(2, rows, "id3")
+            DataFrame(),
+            join_left_frame(rows),
+            join_right_frame(2, rows, "id3", "id6"),
         )
     raise Error(String("firepanda does not run ", query))
 
@@ -590,7 +660,7 @@ def run_query(
             return join_pipeline(probe^, built^, "id2", JoinKind.INNER)
         if query == "j3":
             return join_pipeline(probe^, built^, "id2", JoinKind.LEFT)
-    # j4 and j5 join the big table against another table of the same height,
+    # j5 and j6 join the big table against another table of the same height,
     # and there the pipeline loses. Measured on a 13900K at ten million rows a
     # side: the whole frame route is a 47.2 ms join and a 3.9 ms reduction,
     # 51.1 ms, and the pipeline is a 14.5 ms build and a 41.3 to 46.7 ms
@@ -607,19 +677,21 @@ def run_query(
     # Cutting the chunk to thirty two thousand rows made j1, j2 and j3 twice as
     # fast, which made this worth asking again, and the answer did not move.
     # With `--pipeline-j45=1` at ten million rows a side the frame route is 55.9
-    # and 55.5 ms while the pipeline is 62.2, 85.3, 84.1 and 75.7 on j4 and
-    # 58.6, 71.3, 86.1 and 77.7 on j5 for chunks of sixteen, thirty two, sixty
-    # four and a hundred and twenty eight thousand. Every chunk size loses, and
-    # the smallest one loses least, which is the opposite shape from the other
-    # three queries. That is what a build side too big for any cache looks like:
-    # the chunk cannot help because the thing being missed is the table, not the
-    # chunk. The flag stays so this can be asked a third time.
+    # and 55.5 ms while the pipeline is 62.2, 85.3, 84.1 and 75.7 on the big
+    # inner and 58.6, 71.3, 86.1 and 77.7 on the big outer for chunks of
+    # sixteen, thirty two, sixty four and a hundred and twenty eight thousand.
+    # Every chunk size loses, and the smallest one loses least, which is the
+    # opposite shape from the other three queries. That is what a build side too
+    # big for any cache looks like: the chunk cannot help because the thing
+    # being missed is the table, not the chunk. The flag stays so this can be
+    # asked a third time. Those numbers were taken when the two big joins were
+    # called j4 and j5, which is where the flag's name comes from.
     # An empty probe means the driver did not prepare one, which is what says
     # these two are on their default whole frame route.
     if probe.rows > 0:
-        if query == "j4":
-            return join_pipeline(probe^, built^, "id3", JoinKind.INNER)
         if query == "j5":
+            return join_pipeline(probe^, built^, "id3", JoinKind.INNER)
+        if query == "j6":
             return join_pipeline(probe^, built^, "id3", JoinKind.LEFT)
     # The other direction, which is what `--frame-j123=1` asks for. j1, j2 and
     # j3 default to the pipeline, and this is the route they came off, kept so
@@ -660,14 +732,27 @@ def run_query(
                 join_output(),
             )
         )
+    # j4 is j2 on the character key and it has no pipeline route to default to.
+    # The `Join` node refuses a text key, because pairing one needs the ordinal
+    # space that concatenating both key columns builds and a stream has only one
+    # of them at a time. So this is the whole frame route by necessity rather
+    # than by measurement, and it is the reason j4 is slower than j2 by more
+    # than the key type alone would explain.
     if query == "j4":
+        return reduce_join(
+            tables.left.join(
+                tables.right, keys("id5"), JoinKind.INNER, "_right",
+                join_output(),
+            )
+        )
+    if query == "j5":
         return reduce_join(
             tables.left.join(
                 tables.right, keys("id3"), JoinKind.INNER, "_right",
                 join_output(),
             )
         )
-    if query == "j5":
+    if query == "j6":
         return reduce_join(
             tables.left.join(
                 tables.right, keys("id3"), JoinKind.LEFT, "_right",
@@ -681,8 +766,11 @@ def run_query(
 def join_key(query: String) raises -> String:
     """Returns which column one of the streaming join queries joins on.
 
+    j4 is not here and cannot be. It joins on a character key and the `Join` node
+    refuses one, so there is no pipeline for it to have a key for.
+
     Args:
-        query: The query name, one of j1, j2 and j3.
+        query: The query name, one of j1, j2, j3, j5 and j6.
 
     Returns:
         The key column name, which both tables call the same thing.
@@ -694,7 +782,7 @@ def join_key(query: String) raises -> String:
         return "id1"
     if query == "j2" or query == "j3":
         return "id2"
-    if query == "j4" or query == "j5":
+    if query == "j5" or query == "j6":
         return "id3"
     raise Error(String(query, " is not a streaming join query"))
 
@@ -749,8 +837,9 @@ def reduce_join(var joined: DataFrame) raises -> DataFrame:
     which is what pandas, polars and DuckDB all do. That is the behaviour the
     fingerprint is checking, not an accident of this reduction.
 
-    Used by j4 and j5 only. The other three join queries run as a pipeline and
-    fold each chunk as it is produced, which needs no join result to read back.
+    Used by j4, j5 and j6 only. The other three join queries run as a pipeline
+    and fold each chunk as it is produced, which needs no join result to read
+    back.
 
     Args:
         joined: The join result.
@@ -1242,11 +1331,17 @@ def main() raises:
         var streams = not frame_j123 and (
             query == "j1" or query == "j2" or query == "j3"
         )
-        # j4 and j5 run as a whole frame join by default, for the reason written
-        # out beside them in `run_query`. The flag puts them on the pipeline
-        # instead, which is there so the two routes can be compared again after
-        # something changes rather than being compared once and written down.
-        if pipeline_j45 and (query == "j4" or query == "j5"):
+        # j5 and j6, the two big joins, run as a whole frame join by default for
+        # the reason written out beside them in `run_query`. The flag puts them
+        # on the pipeline instead, which is there so the two routes can be
+        # compared again after something changes rather than being compared once
+        # and written down. The flag keeps its name from when those two queries
+        # were numbered j4 and j5.
+        #
+        # j4 is not in this list and the flag does not reach it. It joins on a
+        # character key and the `Join` node refuses one, so there is no pipeline
+        # route for it to be put on.
+        if pipeline_j45 and (query == "j5" or query == "j6"):
             streams = True
         if not reading and streams:
             probe = probe_frame(tables.left, join_key(query), chunk_rows)

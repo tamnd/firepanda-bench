@@ -14,8 +14,19 @@ claim is only worth anything measured here.
 
 The join set is smaller than the group by set on purpose. What a join costs is
 decided by the shape of the right hand side far more than by anything else, so the
-five queries span a right side of a thousandth, a hundredth and the whole of the
-left, in both the inner and the outer form.
+queries span a right side of a thousandth, a hundredth and the whole of the left,
+in both the inner and the outer form.
+
+j1 through j5 are upstream db-benchmark's five, in its order and on its key types:
+small inner on an integer, medium inner on an integer, medium outer on an integer,
+medium inner on a character key, big inner on an integer. j6 is one extra, a big
+outer, which upstream does not have and which is kept because it is the only place
+an outer join meets a build side too large for any cache.
+
+j4 used to be the big inner and j5 the big outer, and neither of them nor anything
+else in the set joined on text at all. That was wrong about the suite it claims to
+run, and correcting it means numbers for j4 and j5 from before the change are not
+comparable with numbers from after it.
 
 TPC-H is the other suite, and it is here because db-benchmark cannot fail an
 optimizer. Every db-benchmark query is one group by or one join over one table, so
@@ -195,6 +206,17 @@ JOIN = (
     Query(
         "j4",
         "join",
+        "inner join against the medium right table on id5",
+        "The same shape as j2 with a character key instead of an integer one. "
+        "This is the one join upstream db-benchmark runs on text, and the pair "
+        "with j2 is a measurement of what a text key costs and of nothing else, "
+        "because id5 is id2 written out and the two pair the same rows.",
+        ("id5",),
+        ("left", "right_medium"),
+    ),
+    Query(
+        "j5",
+        "join",
         "inner join against the big right table on id3",
         "A right side the size of the left, every key distinct. Nothing fits "
         "anywhere and the join is bound by memory rather than by arithmetic.",
@@ -202,12 +224,14 @@ JOIN = (
         ("left", "right_big"),
     ),
     Query(
-        "j5",
+        "j6",
         "join",
         "left outer join against the big right table on id3",
-        "The largest and least forgiving of the five, and the one where a "
+        "The largest and least forgiving of the six, and the one where a "
         "materialized result is large enough that producing it is part of the "
-        "measurement.",
+        "measurement. Upstream stops at five and this is the extra one, kept "
+        "because it is the only place an outer join meets a build side too big "
+        "for any cache.",
         ("id3",),
         ("left", "right_big"),
     ),

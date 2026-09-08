@@ -4,6 +4,20 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### The join set now has the character join the public suite has, and j4 and j5 are not the queries they were
+
+The join queries here were five and none of them joined on a text key. Upstream db-benchmark's five are named for their key types: small inner on an integer, medium inner on an integer, medium outer on an integer, medium inner on a character key, big inner on an integer. Only the fourth joins on text. The set here had a big inner and a big left join in the last two places, so it was missing the one query in the public suite that exercises a text key and it had one query the public suite does not have.
+
+That was stated the other way round in this repository until now. The claim was that all five join on text, and it was wrong about the suite it says it runs.
+
+The generator now writes id4, id5 and id6 alongside id1, id2 and id3 on the left table and on each right table, as the same values rendered the way upstream renders them, which is `sprintf("id%.0f", x)`. Note that the naming runs the opposite way from the group by table, where id1 through id3 are the character columns. That is upstream's doing and it is reproduced rather than tidied up, because reproducing it is what lets a number here be read next to a published one.
+
+Because id5 is id2 written out, j4 and j2 pair exactly the same rows and produce the same answer to the last digit, which the agreement check confirms across all four engines. So the pair is a measurement of what a text key costs and of nothing else.
+
+The queries are now j1, j2 and j3 unchanged, j4 as the medium inner join on the character key id5, j5 as the big inner join, and j6 as the big left join. j6 is one more than upstream has and it is kept because it is the only place in the set where an outer join meets a build side too large for any cache.
+
+Two things follow from this and both are worth saying plainly. A j4 or j5 number from before this change is not comparable with one from after it, because they are different queries. And every join query is now measured over a wider left table, seven columns instead of four, since every engine is handed the whole file with no projection, so a j1 number from before this change is not strictly comparable either.
+
 ### What the whole frame join shape costs, measured rather than assumed
 
 j1, j2 and j3 run as a pipeline and j4 and j5 run as a whole frame join, and until now there was no number for what the difference is worth on the same query. There is a `--frame-j123=1` flag now that puts the first three back on the route they came off, so both shapes can be run against the same data and the same answer.

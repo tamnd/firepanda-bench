@@ -302,6 +302,18 @@ def j3(ctx: dict) -> pa.Table:
 
 
 def j4(ctx: dict) -> pa.Table:
+    """Inner joins the medium right table on the character key.
+
+    Args:
+        ctx: The loaded tables.
+
+    Returns:
+        The answer.
+    """
+    return _join(ctx, "right_medium", "id5", "inner")
+
+
+def j5(ctx: dict) -> pa.Table:
     """Inner joins the big right table.
 
     Args:
@@ -313,7 +325,7 @@ def j4(ctx: dict) -> pa.Table:
     return _join(ctx, "right_big", "id3", "inner")
 
 
-def j5(ctx: dict) -> pa.Table:
+def j6(ctx: dict) -> pa.Table:
     """Left outer joins the big right table.
 
     Args:
@@ -341,6 +353,7 @@ QUERIES = {
     "j3": j3,
     "j4": j4,
     "j5": j5,
+    "j6": j6,
 }
 
 
