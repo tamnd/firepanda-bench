@@ -1488,9 +1488,13 @@ def q18(ref tables: Tpch) raises -> DataFrame:
     """Large Volume Customer.
 
     The `in` subquery is a group's sum used as a filter on that group's own
-    rows, which is the other half of what `group_broadcast` is for. Every line
-    of a heavy order survives the filter directly, so the lineitem table is read
-    once rather than joined to itself.
+    rows, which is what `group_broadcast` is for, and `group_broadcast` is the
+    wrong tool here anyway. It was written for a small number of large groups,
+    and this groups six million lines into a million and a half orders, so the
+    pass that spreads each order's total back across its lines costs more than
+    aggregating the orders and probing them. Measured at sf1, the broadcast is
+    a hundred and forty six milliseconds and this is forty eight. q17 is the
+    same shape with two hundred thousand groups and there the broadcast wins.
 
     Args:
         tables: The loaded tables.
@@ -1503,14 +1507,17 @@ def q18(ref tables: Tpch) raises -> DataFrame:
     """
     var by: List[String] = ["l_orderkey"]
     var specs: List[AggSpec] = [AggSpec("l_quantity", AggKind.SUM, "total")]
-    var totals = tables.lineitem.group_broadcast(by^, specs^)
-    var wide = tables.lineitem.with_column(totals.column("total"))
-    var line_want: List[String] = ["l_orderkey", "l_quantity"]
-    var heavy = _keep(
-        wide,
-        line_want,
-        _cmp(wide, "total", BinaryOp.GT, Value(Float64(300.0))),
+    var totals = tables.lineitem.group_by(by^, specs^, True, False)
+    var key_want: List[String] = ["l_orderkey"]
+    var heavy_keys = _keep(
+        totals,
+        key_want,
+        _cmp(totals, "total", BinaryOp.GT, Value(Float64(300.0))),
     )
+    var line_want: List[String] = ["l_orderkey", "l_quantity"]
+    var lines = tables.lineitem.select(line_want^)
+    var on: List[String] = ["l_orderkey"]
+    var heavy = lines.join(heavy_keys, on^, JoinKind.SEMI)
 
     var order_want: List[String] = [
         "o_orderkey",
@@ -1697,6 +1704,14 @@ def q21(ref tables: Tpch) raises -> DataFrame:
     there is another supplier on the order, and no other supplier on it was
     late.
 
+    Both counts are compared against a constant, so the comparison happens on
+    the order rather than on the three million late lines the order would be
+    joined to, and what the lines then need from the orders is only whether
+    there is a row, which is a semi join. The same for the order status, the
+    nation and the supplier, all of which used to be joined in whole and
+    filtered afterwards. A hundred and sixty milliseconds against two hundred
+    and eighty five at sf1.
+
     Args:
         tables: The loaded tables.
 
@@ -1712,6 +1727,12 @@ def q21(ref tables: Tpch) raises -> DataFrame:
         AggSpec("l_suppkey", AggKind.NUNIQUE, "distinct_suppliers")
     ]
     var per_order = lineitem.group_by(by^, specs^, True, False)
+    var shared_want: List[String] = ["l_orderkey"]
+    var shared = _keep(
+        per_order,
+        shared_want,
+        _cmp(per_order, "distinct_suppliers", BinaryOp.GT, Value(Int64(1))),
+    )
 
     var late_mask = _cmp2(lineitem, "l_receiptdate", "l_commitdate", BinaryOp.GT)
     var late_want: List[String] = ["l_orderkey", "l_suppkey"]
@@ -1721,32 +1742,48 @@ def q21(ref tables: Tpch) raises -> DataFrame:
         AggSpec("l_suppkey", AggKind.NUNIQUE, "distinct_late_suppliers")
     ]
     var late_per_order = late.group_by(late_by^, late_specs^, True, False)
+    var only_want: List[String] = ["l_orderkey"]
+    var only = _keep(
+        late_per_order,
+        only_want,
+        _cmp(
+            late_per_order,
+            "distinct_late_suppliers",
+            BinaryOp.EQ,
+            Value(Int64(1)),
+        ),
+    )
 
     var orderkey: List[String] = ["l_orderkey"]
-    var joined = late.join(per_order, orderkey.copy())
-    joined = joined.join(late_per_order, orderkey^)
-    joined = joined.filter(
-        _both(
-            _cmp(joined, "distinct_suppliers", BinaryOp.GT, Value(Int64(1))),
-            _cmp(joined, "distinct_late_suppliers", BinaryOp.EQ, Value(Int64(1))),
-        )
-    )
+    var joined = late.join(only, orderkey.copy(), JoinKind.SEMI)
+    joined = joined.join(shared, orderkey^, JoinKind.SEMI)
 
+    var order_want: List[String] = ["o_orderkey"]
+    var finished = _keep(
+        tables.orders,
+        order_want,
+        _cmp(tables.orders, "o_orderstatus", BinaryOp.EQ, Value(String("F"))),
+    )
     var lineorder: List[String] = ["l_orderkey"]
     var order_id: List[String] = ["o_orderkey"]
-    joined = joined.join_on(tables.orders, lineorder^, order_id^)
-    joined = joined.filter(
-        _cmp(joined, "o_orderstatus", BinaryOp.EQ, Value(String("F")))
+    joined = joined.join_on(finished, lineorder^, order_id^, JoinKind.SEMI)
+
+    var nation_want: List[String] = ["n_nationkey"]
+    var saudi = _keep(
+        tables.nation,
+        nation_want,
+        _cmp(
+            tables.nation, "n_name", BinaryOp.EQ, Value(String("SAUDI ARABIA"))
+        ),
     )
-    var suppkey: List[String] = ["l_suppkey"]
-    var supplier_id: List[String] = ["s_suppkey"]
-    joined = joined.join_on(tables.supplier, suppkey^, supplier_id^)
+    var supplier_want: List[String] = ["s_suppkey", "s_name", "s_nationkey"]
+    var sellers = tables.supplier.select(supplier_want^)
     var supp_nation: List[String] = ["s_nationkey"]
     var nation_id: List[String] = ["n_nationkey"]
-    joined = joined.join_on(tables.nation, supp_nation^, nation_id^)
-    joined = joined.filter(
-        _cmp(joined, "n_name", BinaryOp.EQ, Value(String("SAUDI ARABIA")))
-    )
+    var local = sellers.join_on(saudi, supp_nation^, nation_id^, JoinKind.SEMI)
+    var suppkey: List[String] = ["l_suppkey"]
+    var supplier_id: List[String] = ["s_suppkey"]
+    joined = joined.join_on(local, suppkey^, supplier_id^)
 
     var names: List[String] = ["s_name"]
     var counts: List[AggSpec] = [AggSpec("s_name", AggKind.SIZE, "numwait")]
