@@ -136,6 +136,7 @@ def run_external(
     runs: int,
     timeout_s: int,
     paths: dict[str, str],
+    io: str,
 ) -> metrics.Measurement:
     """Measures an engine that is not a Python library, by running it.
 
@@ -160,6 +161,9 @@ def run_external(
         timeout_s: How long to wait for the child.
         paths: The file each table the query reads lives in, empty for a suite
             whose data the child generates for itself.
+        io: Whether the data is handed over in memory or scanned from the file.
+            Passed on so a child that can only do one of the two says so instead
+            of reporting the other one's number under this one's name.
 
     Returns:
         The measurement.
@@ -172,6 +176,7 @@ def run_external(
         suite=suite,
         timeout_s=timeout_s,
         paths=paths,
+        io=io,
     )
     if not result.get("ok"):
         measurement.note = result.get("note", "the engine reported a failure")
@@ -280,7 +285,7 @@ def run(
             if suite == "ingestion":
                 measurement.note = cold_note(metrics.evict_page_cache(list(paths.values())))
             external = run_external(
-                module, engine_name, query_name, manifest, suite, runs, timeout_s, paths
+                module, engine_name, query_name, manifest, suite, runs, timeout_s, paths, io
             )
             if external.ok and measurement.note:
                 external.note = measurement.note

@@ -26,12 +26,21 @@ is CSV, firepanda opens the same file as everybody else, and nothing about the
 comparison depends on two generators agreeing.
 
 That works for db-benchmark, whose data is generated. It does not work for TPC-H,
-whose data comes from dbgen, and no amount of cleverness makes it work: there is
-no seed to reproduce and the only reader firepanda has for the file goes through
-an engine in the table. firepanda is therefore reported as unable to run TPC-H,
-with that reason, until it decodes Parquet itself. It is not omitted from the
-table, because a table that silently contains only the suites we do well on is an
-advertisement.
+whose data comes from dbgen: there is no seed to reproduce. So TPC-H is run the
+only other honest way, which is to read the same Parquet files everybody else
+reads, through DuckDB, before the clock starts. That is exactly what polars and
+pandas do under `--io memory`, where the whole table is loaded eagerly in `load`
+and the query is timed on frames that are already in memory. It is not what
+happens under `--io scan`, where a native reader is most of the answer, and
+firepanda is reported as unable to run that mode until it decodes Parquet itself.
+
+There is a second TPC-H caveat and it runs the other way. The money columns are
+DECIMAL(15,2) in the specification, DuckDB and polars carry decimals through, and
+firepanda's Arrow import cannot read decimal128, so the driver casts them to
+double at load. pandas does the same. Float multiplication is faster than decimal
+multiplication, so this flatters firepanda and pandas both, and the twenty two
+answers are still checked against the published validation output before any
+number is reported.
 
 The generated path is also not free of doubt even where it applies. Generating a
 column is not the same as reading one, so firepanda's load time is not comparable
@@ -56,7 +65,8 @@ NAME = "firepanda"
 EXTERNAL = True
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-DRIVER_SOURCE = ROOT / "engines" / "firepanda" / "main.mojo"
+DRIVER_DIR = ROOT / "engines" / "firepanda"
+DRIVER_SOURCE = DRIVER_DIR / "main.mojo"
 
 # Where the queries stand today. The driver refuses anything not in here, and the
 # reasons are reported next to the empty cells rather than left to be guessed.
@@ -85,6 +95,25 @@ SUPPORTED = (
 )
 
 UNSUPPORTED: dict[str, str] = {}
+
+# All twenty two TPC-H queries. Each one reproduces the specification's published
+# validation output at sf1, checked by `tools/validate_tpch_csv.py` against the
+# answers DuckDB ships, before it was allowed in here.
+TPCH_SUPPORTED = tuple(f"q{number}" for number in range(1, 23))
+
+# The eight tables, in the order `table_names` in the driver returns them. The
+# driver takes one `--path-<table>=` flag per table and leaves the ones it is not
+# given unread.
+TPCH_TABLES = (
+    "customer",
+    "lineitem",
+    "nation",
+    "orders",
+    "part",
+    "partsupp",
+    "region",
+    "supplier",
+)
 
 # The ingestion suite, all of which the CSV reader handles.
 INGESTION_SUPPORTED = (
@@ -207,7 +236,13 @@ def source_fingerprint(home: Path) -> str:
         included, so a rename with no edit still counts as a change.
     """
     digest = hashlib.sha256()
-    digest.update(DRIVER_SOURCE.read_bytes())
+    # Every driver source, not just `main.mojo`. The TPC-H queries live in a
+    # sibling module, and hashing only the entry point would leave a change to
+    # any of the twenty two invisible to this check, which is the exact failure
+    # the rest of this docstring is about.
+    for path in sorted(DRIVER_DIR.glob("*.mojo")):
+        digest.update(path.name.encode())
+        digest.update(path.read_bytes())
     library = home / "firepanda"
     for path in sorted(library.rglob("*.mojo")):
         digest.update(str(path.relative_to(library)).encode())
@@ -254,6 +289,10 @@ def build(force: bool = False) -> Path:
         "build",
         "-I",
         str(home),
+        # The driver's own directory, so `main.mojo` can import the TPC-H
+        # queries from the module beside it.
+        "-I",
+        str(DRIVER_DIR),
         str(DRIVER_SOURCE),
         "-o",
         str(binary),
@@ -276,6 +315,7 @@ def measure(
     suite: str,
     timeout_s: int,
     paths: dict[str, str] | None = None,
+    io: str = "memory",
 ) -> dict:
     """Runs one query in a child process and returns what it measured.
 
@@ -285,8 +325,9 @@ def measure(
         runs: How many timed runs.
         suite: Which suite is being run.
         timeout_s: How long to wait for the child.
-        paths: The file each table lives in, used by the ingestion suite and
-            ignored by the two suites whose data the driver generates.
+        paths: The file each table lives in, used by the ingestion and TPC-H
+            suites and ignored by the one whose data the driver generates.
+        io: Whether the data is handed over in memory or scanned from the file.
 
     Returns:
         A mapping with `ok` and, when true, the timings, memory and answer digest
@@ -297,15 +338,25 @@ def measure(
             return {"ok": False, "note": f"firepanda does not implement {query}"}
         if not paths:
             return {"ok": False, "note": "the harness passed no file to read"}
+    elif suite == "tpch":
+        if io != "memory":
+            return {
+                "ok": False,
+                "note": (
+                    f"firepanda cannot run TPC-H with --io {io}: it decodes "
+                    "Parquet only by handing the file to DuckDB, which is an "
+                    "engine in this table, so the reader being measured would "
+                    "not be its own"
+                ),
+            }
+        if query not in TPCH_SUPPORTED:
+            return {"ok": False, "note": f"firepanda does not implement {query}"}
+        if not paths:
+            return {"ok": False, "note": "the harness passed no tables to read"}
     elif suite != "db-benchmark":
         return {
             "ok": False,
-            "note": (
-                f"firepanda cannot run {suite}: it decodes Parquet only by "
-                "handing the file to DuckDB, which is an engine in this table, "
-                "and unlike db-benchmark this suite's data cannot be "
-                "regenerated from a seed"
-            ),
+            "note": f"firepanda does not run the {suite} suite",
         }
     elif query not in SUPPORTED:
         return {
@@ -328,6 +379,13 @@ def measure(
     if suite == "ingestion":
         # One file per ingestion query, so there is exactly one path to pass.
         command.append(f"--path={next(iter(paths.values()))}")
+    elif suite == "tpch":
+        # One flag per table the query reads. A table it does not read gets no
+        # flag, and the driver leaves that frame empty rather than opening a
+        # file for the sake of it.
+        for table in TPCH_TABLES:
+            if table in paths:
+                command.append(f"--path-{table}={paths[table]}")
     try:
         completed = subprocess.run(
             command, capture_output=True, text=True, timeout=timeout_s, check=False
