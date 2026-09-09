@@ -754,23 +754,35 @@ def q5(ref tables: Tpch) raises -> DataFrame:
     var asia = tables.region.filter(
         _cmp(tables.region, "r_name", BinaryOp.EQ, Value(String("ASIA")))
     ).join_on(tables.nation, region_key^, nation_region^)
+    var customer_want: List[String] = ["c_custkey", "c_nationkey"]
+    var buyers = tables.customer.select(customer_want^)
     var nation_id: List[String] = ["n_nationkey"]
     var cust_nation: List[String] = ["c_nationkey"]
-    var here = asia.join_on(tables.customer, nation_id^, cust_nation^)
+    var here = asia.join_on(buyers, nation_id^, cust_nation^)
+    var year = _both(
+        _cmp(tables.orders, "o_orderdate", BinaryOp.GE, day(1994, 1, 1)),
+        _cmp(tables.orders, "o_orderdate", BinaryOp.LT, day(1995, 1, 1)),
+    )
+    var order_want: List[String] = ["o_orderkey", "o_custkey"]
+    var early = _keep(tables.orders, order_want, year)
     var custkey: List[String] = ["c_custkey"]
     var ordercust: List[String] = ["o_custkey"]
-    var placed = here.join_on(tables.orders, custkey^, ordercust^)
-    var year = _both(
-        _cmp(placed, "o_orderdate", BinaryOp.GE, day(1994, 1, 1)),
-        _cmp(placed, "o_orderdate", BinaryOp.LT, day(1995, 1, 1)),
-    )
-    placed = placed.filter(year)
+    var placed = here.join_on(early, custkey^, ordercust^)
+    var line_want: List[String] = [
+        "l_orderkey",
+        "l_suppkey",
+        "l_extendedprice",
+        "l_discount",
+    ]
+    var sold = tables.lineitem.select(line_want^)
     var orderkey: List[String] = ["o_orderkey"]
     var lineorder: List[String] = ["l_orderkey"]
-    var lines = placed.join_on(tables.lineitem, orderkey^, lineorder^)
+    var lines = placed.join_on(sold, orderkey^, lineorder^)
+    var supplier_want: List[String] = ["s_suppkey", "s_nationkey"]
+    var sellers = tables.supplier.select(supplier_want^)
     var left_pair: List[String] = ["l_suppkey", "n_nationkey"]
     var right_pair: List[String] = ["s_suppkey", "s_nationkey"]
-    var local = lines.join_on(tables.supplier, left_pair^, right_pair^)
+    var local = lines.join_on(sellers, left_pair^, right_pair^)
 
     var wide = local.with_column(_discounted(local, "revenue"))
     var by: List[String] = ["n_name"]
@@ -911,29 +923,52 @@ def q8(ref tables: Tpch) raises -> DataFrame:
     supplier_nation = supplier_nation.rename("n_nationkey", "sn_nationkey")
     supplier_nation = supplier_nation.rename("n_name", "nation")
 
-    var steel = tables.part.filter(
-        _cmp(tables.part, "p_type", BinaryOp.EQ, Value(String("ECONOMY ANODIZED STEEL")))
+    var part_want: List[String] = ["p_partkey"]
+    var steel = _keep(
+        tables.part,
+        part_want,
+        _cmp(
+            tables.part,
+            "p_type",
+            BinaryOp.EQ,
+            Value(String("ECONOMY ANODIZED STEEL")),
+        ),
     )
+    var line_want: List[String] = [
+        "l_orderkey",
+        "l_partkey",
+        "l_suppkey",
+        "l_extendedprice",
+        "l_discount",
+    ]
+    var sold = tables.lineitem.select(line_want^)
     var partkey: List[String] = ["p_partkey"]
     var linepart: List[String] = ["l_partkey"]
-    var lines = steel.join_on(tables.lineitem, partkey^, linepart^)
+    var lines = steel.join_on(sold, partkey^, linepart^)
+    # The window reads only orders, so it runs on the base table rather than on
+    # the join output that used to carry it.
+    var window = _both(
+        _cmp(tables.orders, "o_orderdate", BinaryOp.GE, day(1995, 1, 1)),
+        _cmp(tables.orders, "o_orderdate", BinaryOp.LE, day(1996, 12, 31)),
+    )
+    var order_want: List[String] = ["o_orderkey", "o_custkey", "o_orderdate"]
+    var within = _keep(tables.orders, order_want, window)
     var lineorder: List[String] = ["l_orderkey"]
     var orderkey: List[String] = ["o_orderkey"]
-    var placed = lines.join_on(tables.orders, lineorder^, orderkey^)
-    var window = _both(
-        _cmp(placed, "o_orderdate", BinaryOp.GE, day(1995, 1, 1)),
-        _cmp(placed, "o_orderdate", BinaryOp.LE, day(1996, 12, 31)),
-    )
-    placed = placed.filter(window)
+    var placed = lines.join_on(within, lineorder^, orderkey^)
+    var customer_want: List[String] = ["c_custkey", "c_nationkey"]
+    var buyers = tables.customer.select(customer_want^)
     var ordercust: List[String] = ["o_custkey"]
     var custkey: List[String] = ["c_custkey"]
-    placed = placed.join_on(tables.customer, ordercust^, custkey^)
+    placed = placed.join_on(buyers, ordercust^, custkey^)
     var cust_nation: List[String] = ["c_nationkey"]
     var am_key: List[String] = ["am_nationkey"]
     placed = placed.join_on(america, cust_nation^, am_key^)
+    var supplier_want: List[String] = ["s_suppkey", "s_nationkey"]
+    var sellers = tables.supplier.select(supplier_want^)
     var suppkey: List[String] = ["l_suppkey"]
     var supplier_id: List[String] = ["s_suppkey"]
-    placed = placed.join_on(tables.supplier, suppkey^, supplier_id^)
+    placed = placed.join_on(sellers, suppkey^, supplier_id^)
     var supp_nation: List[String] = ["s_nationkey"]
     var sn_key: List[String] = ["sn_nationkey"]
     placed = placed.join_on(supplier_nation, supp_nation^, sn_key^)
@@ -974,24 +1009,48 @@ def q9(ref tables: Tpch) raises -> DataFrame:
     Raises:
         As the operations it runs do.
     """
-    var green = tables.part.filter(
-        tables.part.column("p_name").str_contains("green")
+    var part_want: List[String] = ["p_partkey"]
+    var green = _keep(
+        tables.part,
+        part_want,
+        tables.part.column("p_name").str_contains("green"),
     )
+    var line_want: List[String] = [
+        "l_orderkey",
+        "l_partkey",
+        "l_suppkey",
+        "l_quantity",
+        "l_extendedprice",
+        "l_discount",
+    ]
+    var sold = tables.lineitem.select(line_want^)
     var partkey: List[String] = ["p_partkey"]
     var linepart: List[String] = ["l_partkey"]
-    var lines = green.join_on(tables.lineitem, partkey^, linepart^)
+    var lines = green.join_on(sold, partkey^, linepart^)
+    var supplier_want: List[String] = ["s_suppkey", "s_nationkey"]
+    var sellers = tables.supplier.select(supplier_want^)
     var suppkey: List[String] = ["l_suppkey"]
     var supplier_id: List[String] = ["s_suppkey"]
-    lines = lines.join_on(tables.supplier, suppkey^, supplier_id^)
+    lines = lines.join_on(sellers, suppkey^, supplier_id^)
+    var stock_want: List[String] = [
+        "ps_partkey",
+        "ps_suppkey",
+        "ps_supplycost",
+    ]
+    var stock = tables.partsupp.select(stock_want^)
     var left_pair: List[String] = ["p_partkey", "l_suppkey"]
     var right_pair: List[String] = ["ps_partkey", "ps_suppkey"]
-    lines = lines.join_on(tables.partsupp, left_pair^, right_pair^)
+    lines = lines.join_on(stock, left_pair^, right_pair^)
+    var order_want: List[String] = ["o_orderkey", "o_orderdate"]
+    var placed = tables.orders.select(order_want^)
     var lineorder: List[String] = ["l_orderkey"]
     var orderkey: List[String] = ["o_orderkey"]
-    lines = lines.join_on(tables.orders, lineorder^, orderkey^)
+    lines = lines.join_on(placed, lineorder^, orderkey^)
+    var nation_want: List[String] = ["n_nationkey", "n_name"]
+    var nations = tables.nation.select(nation_want^)
     var supp_nation: List[String] = ["s_nationkey"]
     var nation_id: List[String] = ["n_nationkey"]
-    lines = lines.join_on(tables.nation, supp_nation^, nation_id^)
+    lines = lines.join_on(nations, supp_nation^, nation_id^)
 
     var year = lines.column("o_orderdate").dt("year").rename("o_year")
     var cost = lines.column("ps_supplycost") * lines.column("l_quantity")
@@ -1021,23 +1080,33 @@ def q10(ref tables: Tpch) raises -> DataFrame:
     Raises:
         As the operations it runs do.
     """
+    var quarter = _both(
+        _cmp(tables.orders, "o_orderdate", BinaryOp.GE, day(1993, 10, 1)),
+        _cmp(tables.orders, "o_orderdate", BinaryOp.LT, day(1994, 1, 1)),
+    )
+    var order_want: List[String] = ["o_orderkey", "o_custkey"]
+    var early = _keep(tables.orders, order_want, quarter)
     var custkey: List[String] = ["c_custkey"]
     var ordercust: List[String] = ["o_custkey"]
-    var placed = tables.customer.join_on(tables.orders, custkey^, ordercust^)
-    var quarter = _both(
-        _cmp(placed, "o_orderdate", BinaryOp.GE, day(1993, 10, 1)),
-        _cmp(placed, "o_orderdate", BinaryOp.LT, day(1994, 1, 1)),
+    var placed = tables.customer.join_on(early, custkey^, ordercust^)
+    var line_want: List[String] = [
+        "l_orderkey",
+        "l_extendedprice",
+        "l_discount",
+    ]
+    var returned = _keep(
+        tables.lineitem,
+        line_want,
+        _cmp(tables.lineitem, "l_returnflag", BinaryOp.EQ, Value(String("R"))),
     )
-    placed = placed.filter(quarter)
     var orderkey: List[String] = ["o_orderkey"]
     var lineorder: List[String] = ["l_orderkey"]
-    var lines = placed.join_on(tables.lineitem, orderkey^, lineorder^)
-    lines = lines.filter(
-        _cmp(lines, "l_returnflag", BinaryOp.EQ, Value(String("R")))
-    )
+    var lines = placed.join_on(returned, orderkey^, lineorder^)
+    var nation_want: List[String] = ["n_nationkey", "n_name"]
+    var nations = tables.nation.select(nation_want^)
     var cust_nation: List[String] = ["c_nationkey"]
     var nation_id: List[String] = ["n_nationkey"]
-    lines = lines.join_on(tables.nation, cust_nation^, nation_id^)
+    lines = lines.join_on(nations, cust_nation^, nation_id^)
 
     var wide = lines.with_column(_discounted(lines, "revenue"))
     var by: List[String] = [
@@ -1078,17 +1147,29 @@ def q11(ref tables: Tpch) raises -> DataFrame:
     Raises:
         As the operations it runs do.
     """
+    var stock_want: List[String] = [
+        "ps_partkey",
+        "ps_suppkey",
+        "ps_availqty",
+        "ps_supplycost",
+    ]
+    var held = tables.partsupp.select(stock_want^)
+    var supplier_want: List[String] = ["s_suppkey", "s_nationkey"]
+    var sellers = tables.supplier.select(supplier_want^)
     var partsupp_supplier: List[String] = ["ps_suppkey"]
     var supplier_id: List[String] = ["s_suppkey"]
-    var stock = tables.partsupp.join_on(
-        tables.supplier, partsupp_supplier^, supplier_id^
+    var stock = held.join_on(sellers, partsupp_supplier^, supplier_id^)
+    # One nation survives, so selecting it before the join makes this a probe
+    # against a single row rather than a filter over the join output.
+    var nation_want: List[String] = ["n_nationkey"]
+    var germany = _keep(
+        tables.nation,
+        nation_want,
+        _cmp(tables.nation, "n_name", BinaryOp.EQ, Value(String("GERMANY"))),
     )
     var supp_nation: List[String] = ["s_nationkey"]
     var nation_id: List[String] = ["n_nationkey"]
-    stock = stock.join_on(tables.nation, supp_nation^, nation_id^)
-    stock = stock.filter(
-        _cmp(stock, "n_name", BinaryOp.EQ, Value(String("GERMANY")))
-    )
+    stock = stock.join_on(germany, supp_nation^, nation_id^)
     var value = (
         stock.column("ps_supplycost") * stock.column("ps_availqty")
     ).rename("value")
