@@ -24,7 +24,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import pyarrow.csv as pacsv
-
 import tpch
 from validate_tpch import compare
 
@@ -64,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             table = pacsv.read_csv(path)
             verdict = compare(table, answers[query])
-        except Exception as error:  # noqa: BLE001
+        except Exception as error:
             verdict = f"{type(error).__name__}: {error}"
         if not verdict:
             print(f"  {query:<4} ok")
