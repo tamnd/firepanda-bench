@@ -43,14 +43,23 @@ from firepanda.array.any import AnyArray
 from firepanda.array.array import Array
 from firepanda.array.chunked import ChunkedArray
 from firepanda.array.strings import StringArray, StringBuilder
-from firepanda.dtype import Field, LogicalType, Schema
+from firepanda.dtype import (
+    Field,
+    LogicalType,
+    Schema,
+    TimeUnit,
+    TypeKind,
+)
 from firepanda.exec import GroupAgg, Join, Node, Pipeline, Reduce
 from firepanda.frame.frame import DataFrame
 from firepanda.frame.groupby import AggSpec
 from firepanda.frame.series import Series
 from firepanda.io import ReadOptions, read_csv, read_csv_as
+from firepanda.io.write import write_csv
 from firepanda.join import JoinKind
 from firepanda.kernel import AggKind, multiply, subtract
+
+from tpch import Tpch, load_tpch, run_tpch, table_names
 
 # 64 bit FNV-1a, which is what `tools/engines/__init__.py` hashes a text value
 # with. The two constants are the published ones and the null constant is the
@@ -999,6 +1008,11 @@ def column_sum(ref column: AnyArray) raises -> Float64:
         # below would sum the first byte of every view and report it as a
         # column sum. `column_hash` is what covers a text column.
         return total
+    if (
+        column.type.kind == TypeKind.DATE
+        or column.type.kind == TypeKind.TIMESTAMP
+    ):
+        return temporal_sum(column)
     var dtype = column.dtype()
     if dtype == DType.int32:
         var typed = column.as_typed[DType.int32]()
@@ -1030,6 +1044,53 @@ def column_sum(ref column: AnyArray) raises -> Float64:
         for i in range(len(typed)):
             if typed.is_valid(i) and not isnan(Float64(typed[i])):
                 total += Float64(typed[i])
+    return total
+
+
+def temporal_sum(ref column: AnyArray) raises -> Float64:
+    """Sums a date or a timestamp column as microseconds since the epoch.
+
+    The harness casts a temporal column to `timestamp[us]` before it sums, so
+    that an engine answering q3 with a date and one answering with a midnight
+    timestamp are not made to disagree about a column they both got right. That
+    means firepanda has to arrive at the same total from what it actually holds,
+    which for a date is a count of days. Summing the days instead reported q3 and
+    q18 as disagreements on runs where both had just reproduced the
+    specification's published answer exactly.
+
+    The scaling is per element rather than applied to the total, because
+    nanoseconds divide rather than multiply and the cast truncates each value
+    before it is added rather than truncating the sum.
+
+    Args:
+        column: The column, a date or a timestamp.
+
+    Returns:
+        The sum of the rows as microseconds, skipping nulls.
+    """
+    var scale = Int64(1)
+    var shrink = Int64(1)
+    if column.type.kind == TypeKind.DATE:
+        scale = 86_400_000_000
+    elif column.type.unit == TimeUnit.SECOND:
+        scale = 1_000_000
+    elif column.type.unit == TimeUnit.MILLI:
+        scale = 1_000
+    elif column.type.unit == TimeUnit.NANO:
+        shrink = 1_000
+
+    var total = Float64(0)
+    var dtype = column.dtype()
+    if dtype == DType.int32:
+        var typed = column.as_typed[DType.int32]()
+        for i in range(len(typed)):
+            if typed.is_valid(i):
+                total += Float64(Int64(typed[i]) * scale // shrink)
+    elif dtype == DType.int64:
+        var typed = column.as_typed[DType.int64]()
+        for i in range(len(typed)):
+            if typed.is_valid(i):
+                total += Float64(typed[i] * scale // shrink)
     return total
 
 
@@ -1237,6 +1298,23 @@ def flag(name: String, fallback: String) -> String:
     return fallback
 
 
+def tpch_paths() -> List[String]:
+    """Reads the eight `--path-<table>=` flags into the order the loader wants.
+
+    A table this query does not read has no flag and comes back empty, which is
+    what tells the loader to leave that frame alone rather than reading a file
+    nobody is going to touch.
+
+    Returns:
+        One path per name in `table_names`, in that order.
+    """
+    var names = table_names()
+    var out = List[String](capacity=len(names))
+    for i in range(len(names)):
+        out.append(flag(String("path-", names[i]), ""))
+    return out^
+
+
 def json_number(value: Float64) -> String:
     """Formats a float as a JSON number.
 
@@ -1302,18 +1380,26 @@ def main() raises:
     var pipeline_j45 = flag("pipeline-j45", "0") == "1"
     var frame_j123 = flag("frame-j123", "0") == "1"
     var reading = suite == "ingestion"
+    var playing = suite == "tpch"
+    # Where to dump the answer as CSV, which is how the twenty two queries get
+    # checked against the published validation output. The harness never sets
+    # it, so nothing is written on a timed run.
+    var answer_path = flag("answer", "")
 
     var before = read_process_facts()
 
     var load_start = perf_counter_ns()
     var tables: Tables
+    var tpch_tables = Tpch()
     try:
         # An ingestion query loads nothing before it is timed. Opening the file
         # is the measurement, so anything done here would be work taken out of
         # the number.
         tables = Tables(
             DataFrame(), DataFrame(), DataFrame()
-        ) if reading else load(query, rows)
+        ) if reading or playing else load(query, rows)
+        if playing:
+            tpch_tables = load_tpch(tpch_paths())
     except error:
         print(
             String(
@@ -1359,7 +1445,7 @@ def main() raises:
             query == "j4" or query == "j5" or query == "j6"
         ):
             streams = True
-        if not reading and streams:
+        if not reading and not playing and streams:
             probe = probe_frame(tables.left, join_key(query), chunk_rows)
             built = DataFrame(copy=tables.right)
         var started = perf_counter_ns()
@@ -1368,9 +1454,12 @@ def main() raises:
         # instead of leaving the harness to explain a driver that printed
         # nothing.
         try:
-            answer = read_one(query, path) if reading else run_query(
-                query, tables, probe^, built^
-            )
+            if reading:
+                answer = read_one(query, path)
+            elif playing:
+                answer = run_tpch(query, tpch_tables)
+            else:
+                answer = run_query(query, tables, probe^, built^)
         except error:
             failure = String(error)
             break
@@ -1396,6 +1485,11 @@ def main() raises:
 
     var cpu_after = read_usage()
     var after = read_process_facts()
+
+    # After the clock and the memory readings, so asking for the answer does not
+    # change the numbers the run reports.
+    if answer_path:
+        write_csv(answer, answer_path)
 
     # Numbers go in `sums` and text goes in `hashes`, and a column is in exactly
     # one of the two. The harness splits an answer the same way, so a column
