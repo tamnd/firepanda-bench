@@ -666,7 +666,12 @@ def q1(ref tables: Tpch) raises -> DataFrame:
             BinaryOp.MUL,
         ),
     )
-    var wide = kept.with_column(disc_price^).with_column(charge^)
+    # In place, because `kept` is this query's own frame and nothing else reads
+    # it. Two `with_column` calls would be two deep copies of six columns of
+    # five point nine million rows to write two new ones.
+    var wide = kept^
+    wide.add_column(disc_price^)
+    wide.add_column(charge^)
     var by: List[String] = ["l_returnflag", "l_linestatus"]
     var specs: List[AggSpec] = [
         AggSpec("l_quantity", AggKind.SUM, "sum_qty"),
@@ -791,7 +796,9 @@ def q3(ref tables: Tpch) raises -> DataFrame:
     var lineorder: List[String] = ["l_orderkey"]
     var lines = placed.join_on(late_lines, orderkey^, lineorder^)
 
-    var wide = lines.with_column(_discounted(lines, "revenue"))
+    var revenue = _discounted(lines, "revenue")
+    var wide = lines^
+    wide.add_column(revenue^)
     var by: List[String] = ["o_orderkey", "o_orderdate", "o_shippriority"]
     var specs: List[AggSpec] = [AggSpec("revenue", AggKind.SUM, "revenue")]
     var grouped = wide.group_by(by^, specs^, True, False)
@@ -890,7 +897,9 @@ def q5(ref tables: Tpch) raises -> DataFrame:
     var right_pair: List[String] = ["s_suppkey", "s_nationkey"]
     var local = lines.join_on(sellers, left_pair^, right_pair^)
 
-    var wide = local.with_column(_discounted(local, "revenue"))
+    var revenue = _discounted(local, "revenue")
+    var wide = local^
+    wide.add_column(revenue^)
     var by: List[String] = ["n_name"]
     var specs: List[AggSpec] = [AggSpec("revenue", AggKind.SUM, "revenue")]
     var grouped = wide.group_by(by^, specs^, True, False)
@@ -1013,9 +1022,10 @@ def q7(ref tables: Tpch) raises -> DataFrame:
     )
 
     var year = _year(shipping, "l_shipdate", "l_year")
-    var wide = shipping.with_column(year^).with_column(
-        _discounted(shipping, "volume")
-    )
+    var volume = _discounted(shipping, "volume")
+    var wide = shipping^
+    wide.add_column(year^)
+    wide.add_column(volume^)
     var by: List[String] = ["supp_nation", "cust_nation", "l_year"]
     var specs: List[AggSpec] = [AggSpec("volume", AggKind.SUM, "revenue")]
     return wide.group_by(by^, specs^, True, True)
@@ -1106,11 +1116,10 @@ def q8(ref tables: Tpch) raises -> DataFrame:
     var only_brazil = volume.pick(brazil, _zeros(placed.rows)).rename(
         "brazil_volume"
     )
-    var wide = (
-        placed.with_column(year^)
-        .with_column(volume^)
-        .with_column(only_brazil^)
-    )
+    var wide = placed^
+    wide.add_column(year^)
+    wide.add_column(volume^)
+    wide.add_column(only_brazil^)
     var by: List[String] = ["o_year"]
     var specs: List[AggSpec] = [
         AggSpec("brazil_volume", AggKind.SUM, "brazil"),
@@ -1182,11 +1191,10 @@ def q9(ref tables: Tpch) raises -> DataFrame:
     var year = _year(lines, "o_orderdate", "o_year")
     var cost = _product(lines, "ps_supplycost", "l_quantity", "cost")
     var amount = (_discounted(lines, "amount") - cost).rename("amount")
-    var wide = (
-        lines.with_column(year^)
-        .with_column(amount^)
-        .rename("n_name", "nation")
-    )
+    var named = lines^
+    named.add_column(year^)
+    named.add_column(amount^)
+    var wide = named.rename("n_name", "nation")
     var by: List[String] = ["nation", "o_year"]
     var specs: List[AggSpec] = [AggSpec("amount", AggKind.SUM, "sum_profit")]
     var grouped = wide.group_by(by^, specs^, True, False)
@@ -1235,7 +1243,9 @@ def q10(ref tables: Tpch) raises -> DataFrame:
     var nation_id: List[String] = ["n_nationkey"]
     lines = lines.join_on(nations, cust_nation^, nation_id^)
 
-    var wide = lines.with_column(_discounted(lines, "revenue"))
+    var revenue = _discounted(lines, "revenue")
+    var wide = lines^
+    wide.add_column(revenue^)
     var by: List[String] = [
         "c_custkey",
         "c_name",
@@ -1301,7 +1311,8 @@ def q11(ref tables: Tpch) raises -> DataFrame:
         stock.column("ps_supplycost") * stock.column("ps_availqty")
     ).rename("value")
     var threshold = _reduced(value, AggKind.SUM) * 0.0001
-    var wide = stock.with_column(value^)
+    var wide = stock^
+    wide.add_column(value^)
     var by: List[String] = ["ps_partkey"]
     var specs: List[AggSpec] = [AggSpec("value", AggKind.SUM, "value")]
     var grouped = wide.group_by(by^, specs^, True, False)
@@ -1358,7 +1369,9 @@ def q12(ref tables: Tpch) raises -> DataFrame:
     var priority = kept.column("o_orderpriority").is_in(_texts(urgent^))
     var high = _flags(priority.copy(), "high_line_count")
     var low = _flags(_not(priority^), "low_line_count")
-    var wide = kept.with_column(high^).with_column(low^)
+    var wide = kept^
+    wide.add_column(high^)
+    wide.add_column(low^)
     var by: List[String] = ["l_shipmode"]
     var specs: List[AggSpec] = [
         AggSpec("high_line_count", AggKind.SUM, "high_line_count"),
@@ -1467,7 +1480,9 @@ def q15(ref tables: Tpch) raises -> DataFrame:
         "l_discount",
     ]
     var lines = _keep(tables.lineitem, line_want, quarter)
-    var wide = lines.with_column(_discounted(lines, "revenue"))
+    var revenue = _discounted(lines, "revenue")
+    var wide = lines^
+    wide.add_column(revenue^)
     var by: List[String] = ["l_suppkey"]
     var specs: List[AggSpec] = [
         AggSpec("revenue", AggKind.SUM, "total_revenue")
@@ -1591,7 +1606,8 @@ def q17(ref tables: Tpch) raises -> DataFrame:
     var threshold = (average.column("avg_qty") * Value(Float64(0.2))).rename(
         "threshold"
     )
-    var wide = lines.with_column(threshold^)
+    var wide = lines^
+    wide.add_column(threshold^)
     var small = wide.filter(
         _cmp2(wide, "l_quantity", "threshold", BinaryOp.LT)
     )
