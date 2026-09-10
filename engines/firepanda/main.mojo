@@ -43,7 +43,13 @@ from firepanda.array.any import AnyArray
 from firepanda.array.array import Array
 from firepanda.array.chunked import ChunkedArray
 from firepanda.array.strings import StringArray, StringBuilder
-from firepanda.dtype import Field, LogicalType, Schema
+from firepanda.dtype import (
+    Field,
+    LogicalType,
+    Schema,
+    TimeUnit,
+    TypeKind,
+)
 from firepanda.exec import GroupAgg, Join, Node, Pipeline, Reduce
 from firepanda.frame.frame import DataFrame
 from firepanda.frame.groupby import AggSpec
@@ -1002,6 +1008,11 @@ def column_sum(ref column: AnyArray) raises -> Float64:
         # below would sum the first byte of every view and report it as a
         # column sum. `column_hash` is what covers a text column.
         return total
+    if (
+        column.type.kind == TypeKind.DATE
+        or column.type.kind == TypeKind.TIMESTAMP
+    ):
+        return temporal_sum(column)
     var dtype = column.dtype()
     if dtype == DType.int32:
         var typed = column.as_typed[DType.int32]()
@@ -1033,6 +1044,53 @@ def column_sum(ref column: AnyArray) raises -> Float64:
         for i in range(len(typed)):
             if typed.is_valid(i) and not isnan(Float64(typed[i])):
                 total += Float64(typed[i])
+    return total
+
+
+def temporal_sum(ref column: AnyArray) raises -> Float64:
+    """Sums a date or a timestamp column as microseconds since the epoch.
+
+    The harness casts a temporal column to `timestamp[us]` before it sums, so
+    that an engine answering q3 with a date and one answering with a midnight
+    timestamp are not made to disagree about a column they both got right. That
+    means firepanda has to arrive at the same total from what it actually holds,
+    which for a date is a count of days. Summing the days instead reported q3 and
+    q18 as disagreements on runs where both had just reproduced the
+    specification's published answer exactly.
+
+    The scaling is per element rather than applied to the total, because
+    nanoseconds divide rather than multiply and the cast truncates each value
+    before it is added rather than truncating the sum.
+
+    Args:
+        column: The column, a date or a timestamp.
+
+    Returns:
+        The sum of the rows as microseconds, skipping nulls.
+    """
+    var scale = Int64(1)
+    var shrink = Int64(1)
+    if column.type.kind == TypeKind.DATE:
+        scale = 86_400_000_000
+    elif column.type.unit == TimeUnit.SECOND:
+        scale = 1_000_000
+    elif column.type.unit == TimeUnit.MILLI:
+        scale = 1_000
+    elif column.type.unit == TimeUnit.NANO:
+        shrink = 1_000
+
+    var total = Float64(0)
+    var dtype = column.dtype()
+    if dtype == DType.int32:
+        var typed = column.as_typed[DType.int32]()
+        for i in range(len(typed)):
+            if typed.is_valid(i):
+                total += Float64(Int64(typed[i]) * scale // shrink)
+    elif dtype == DType.int64:
+        var typed = column.as_typed[DType.int64]()
+        for i in range(len(typed)):
+            if typed.is_valid(i):
+                total += Float64(typed[i] * scale // shrink)
     return total
 
 
