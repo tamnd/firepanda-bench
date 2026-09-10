@@ -41,8 +41,16 @@ from firepanda.frame.groupby import AggKind, AggSpec
 from firepanda.frame.series import Series
 from firepanda.io.parquet import Session
 from firepanda.join import JoinKind
-from firepanda.kernel import filter_any, logical_and, logical_or, reduce_any
+from firepanda.kernel import (
+    filter_any,
+    is_in_any,
+    logical_and,
+    logical_or,
+    reduce_any,
+)
 from firepanda.kernel.binary import BinaryOp, binary_any, binary_value_any
+from firepanda.kernel.pattern import text_contains
+from firepanda.kernel.temporal import TemporalField, temporal_field
 
 comptime TABLE_COUNT = 8
 """How many tables TPC-H has, which is how many paths the driver passes."""
@@ -304,6 +312,94 @@ def _cmp(
     """
     var at = frame.schema.index_of(name)
     return binary_value_any(frame[at], value, op).as_typed[DType.bool]()
+
+
+def _in(
+    frame: DataFrame, name: String, values: List[String]
+) raises -> Array[DType.bool]:
+    """Looks one column up in a set of strings without copying the column.
+
+    The same argument as `_cmp` and a bigger number behind it, because a text
+    column is sixteen bytes of view a row before any of the bytes. On q19,
+    whose set is the two air shipping modes, reading `l_shipmode` through
+    `DataFrame.column` is thirteen milliseconds at sf1 and reading it through
+    the borrow is two. The lookup itself is the two milliseconds; the other
+    eleven are a ninety six megabyte copy made to answer a question that only
+    reads it.
+
+    Args:
+        frame: The frame.
+        name: The column to look up.
+        values: The set.
+
+    Returns:
+        The mask.
+
+    Raises:
+        If the column is missing, or as the lookup does.
+    """
+    var at = frame.schema.index_of(name)
+    return is_in_any(frame[at], _texts(values).into_values())
+
+
+def _year(frame: DataFrame, name: String, into: String) raises -> Series:
+    """Reads the year out of a date column without copying the column.
+
+    Args:
+        frame: The frame.
+        name: The date column.
+        into: The name the answer should carry.
+
+    Returns:
+        The year as a series.
+
+    Raises:
+        If the column is missing, or as the field read does.
+    """
+    var at = frame.schema.index_of(name)
+    return Series(into, temporal_field(frame[at], TemporalField.YEAR))
+
+
+def _product(
+    frame: DataFrame, left: String, right: String, into: String
+) raises -> Series:
+    """Multiplies two columns of a frame without copying either.
+
+    Args:
+        frame: The frame.
+        left: The left column.
+        right: The right column.
+        into: The name the answer should carry.
+
+    Returns:
+        The product as a series.
+
+    Raises:
+        If either column is missing, or as the multiplication does.
+    """
+    var a = frame.schema.index_of(left)
+    var b = frame.schema.index_of(right)
+    return Series(into, binary_any(frame[a], frame[b], BinaryOp.MUL))
+
+
+def _contains(
+    frame: DataFrame, name: String, needle: String
+) raises -> Array[DType.bool]:
+    """Returns a mask of the rows whose text holds a substring, borrowing.
+
+    Args:
+        frame: The frame.
+        name: The text column.
+        needle: The substring.
+
+    Returns:
+        The mask.
+
+    Raises:
+        If the column is missing or is not text.
+    """
+    var at = frame.schema.index_of(name)
+    return text_contains(frame[at].strings(), needle.as_bytes())
 
 
 def _cmp2(
@@ -831,7 +927,7 @@ def q6(ref tables: Tpch) raises -> DataFrame:
     var kept = _keep(
         lineitem, want, _both(_both(shipped, discounted), small)
     )
-    var revenue = kept.column("l_extendedprice") * kept.column("l_discount")
+    var revenue = _product(kept, "l_extendedprice", "l_discount", "revenue")
     return _one("revenue", _reduced(revenue, AggKind.SUM))
 
 
@@ -842,6 +938,15 @@ def q7(ref tables: Tpch) raises -> DataFrame:
     nation frame and a filter that the two sides disagree, rather than a filter
     over the full cross product, which is the shape the query is trying to
     avoid.
+
+    The two nation joins happen on `supplier` and `customer` before either one
+    meets `lineitem`, which is the whole cost of this query. Two nations out of
+    twenty five is eight per cent of the suppliers, so joining the shipping
+    window to that subset first drops four and a half million rows to a third of
+    a million, and everything after it is that much smaller. Written the other
+    way round, with the full supplier and customer tables joined in and the
+    nation filter applied at the end, it is a hundred and fifty five
+    milliseconds at sf1 against seventy two for this.
 
     Args:
         tables: The loaded tables.
@@ -864,6 +969,22 @@ def q7(ref tables: Tpch) raises -> DataFrame:
     cust = cust.rename("n_nationkey", "cust_nationkey")
     cust = cust.rename("n_name", "cust_nation")
 
+    var supplier_want: List[String] = ["s_suppkey", "s_nationkey"]
+    var sellers = tables.supplier.select(supplier_want^)
+    var supp_nation_key: List[String] = ["s_nationkey"]
+    var supp_key: List[String] = ["supp_nationkey"]
+    sellers = sellers.join_on(supp, supp_nation_key^, supp_key^)
+    var seller_keep: List[String] = ["s_suppkey", "supp_nation"]
+    sellers = sellers.select(seller_keep^)
+
+    var customer_want: List[String] = ["c_custkey", "c_nationkey"]
+    var buyers = tables.customer.select(customer_want^)
+    var cust_nation_key: List[String] = ["c_nationkey"]
+    var cust_key: List[String] = ["cust_nationkey"]
+    buyers = buyers.join_on(cust, cust_nation_key^, cust_key^)
+    var buyer_keep: List[String] = ["c_custkey", "cust_nation"]
+    buyers = buyers.select(buyer_keep^)
+
     var window = _both(
         _cmp(tables.lineitem, "l_shipdate", BinaryOp.GE, day(1995, 1, 1)),
         _cmp(tables.lineitem, "l_shipdate", BinaryOp.LE, day(1996, 12, 31)),
@@ -878,24 +999,20 @@ def q7(ref tables: Tpch) raises -> DataFrame:
     var lines = _keep(tables.lineitem, line_want, window)
     var suppkey: List[String] = ["l_suppkey"]
     var supplier_id: List[String] = ["s_suppkey"]
-    var shipping = lines.join_on(tables.supplier, suppkey^, supplier_id^)
-    var supp_nation_key: List[String] = ["s_nationkey"]
-    var supp_key: List[String] = ["supp_nationkey"]
-    shipping = shipping.join_on(supp, supp_nation_key^, supp_key^)
+    var shipping = lines.join_on(sellers, suppkey^, supplier_id^)
+    var order_want: List[String] = ["o_orderkey", "o_custkey"]
+    var placed = tables.orders.select(order_want^)
     var lineorder: List[String] = ["l_orderkey"]
     var orderkey: List[String] = ["o_orderkey"]
-    shipping = shipping.join_on(tables.orders, lineorder^, orderkey^)
+    shipping = shipping.join_on(placed, lineorder^, orderkey^)
     var ordercust: List[String] = ["o_custkey"]
     var custkey: List[String] = ["c_custkey"]
-    shipping = shipping.join_on(tables.customer, ordercust^, custkey^)
-    var cust_nation_key: List[String] = ["c_nationkey"]
-    var cust_key: List[String] = ["cust_nationkey"]
-    shipping = shipping.join_on(cust, cust_nation_key^, cust_key^)
+    shipping = shipping.join_on(buyers, ordercust^, custkey^)
     shipping = shipping.filter(
         _cmp2(shipping, "supp_nation", "cust_nation", BinaryOp.NE)
     )
 
-    var year = shipping.column("l_shipdate").dt("year").rename("l_year")
+    var year = _year(shipping, "l_shipdate", "l_year")
     var wide = shipping.with_column(year^).with_column(
         _discounted(shipping, "volume")
     )
@@ -983,7 +1100,7 @@ def q8(ref tables: Tpch) raises -> DataFrame:
     var sn_key: List[String] = ["sn_nationkey"]
     placed = placed.join_on(supplier_nation, supp_nation^, sn_key^)
 
-    var year = placed.column("o_orderdate").dt("year").rename("o_year")
+    var year = _year(placed, "o_orderdate", "o_year")
     var volume = _discounted(placed, "volume")
     var brazil = _cmp(placed, "nation", BinaryOp.EQ, Value(String("BRAZIL")))
     var only_brazil = volume.pick(brazil, _zeros(placed.rows)).rename(
@@ -1023,7 +1140,7 @@ def q9(ref tables: Tpch) raises -> DataFrame:
     var green = _keep(
         tables.part,
         part_want,
-        tables.part.column("p_name").str_contains("green"),
+        _contains(tables.part, "p_name", "green"),
     )
     var line_want: List[String] = [
         "l_orderkey",
@@ -1062,8 +1179,8 @@ def q9(ref tables: Tpch) raises -> DataFrame:
     var nation_id: List[String] = ["n_nationkey"]
     lines = lines.join_on(nations, supp_nation^, nation_id^)
 
-    var year = lines.column("o_orderdate").dt("year").rename("o_year")
-    var cost = lines.column("ps_supplycost") * lines.column("l_quantity")
+    var year = _year(lines, "o_orderdate", "o_year")
+    var cost = _product(lines, "ps_supplycost", "l_quantity", "cost")
     var amount = (_discounted(lines, "amount") - cost).rename("amount")
     var wide = (
         lines.with_column(year^)
@@ -1214,7 +1331,7 @@ def q12(ref tables: Tpch) raises -> DataFrame:
     # six million rows to keep about thirty thousand of them.
     ref lineitem = tables.lineitem
     var modes: List[String] = ["MAIL", "SHIP"]
-    var wanted = lineitem.column("l_shipmode").is_in(_texts(modes^))
+    var wanted = _in(lineitem, "l_shipmode", modes)
     wanted = _both(
         wanted,
         _cmp2(lineitem, "l_commitdate", "l_receiptdate", BinaryOp.LT),
@@ -1563,6 +1680,14 @@ def q18(ref tables: Tpch) raises -> DataFrame:
 def q19(ref tables: Tpch) raises -> DataFrame:
     """Discounted Revenue.
 
+    The three disjuncts differ in the brand, the container, the quantity and the
+    size, but between them they only ever ask for one of three brands, one of
+    twelve containers, a size from one to fifteen and a quantity from one to
+    thirty. Those four run on `part` and on `lineitem` before the join, which is
+    where a planner would put them, and the disjunction itself then runs over
+    what is left rather than over every shipped line. Eighty three milliseconds
+    at sf1 written the other way and seventy this way.
+
     Args:
         tables: The loaded tables.
 
@@ -1573,37 +1698,88 @@ def q19(ref tables: Tpch) raises -> DataFrame:
         As the operations it runs do.
     """
     var modes: List[String] = ["AIR", "AIR REG"]
-    var shipped = tables.lineitem.column("l_shipmode").is_in(_texts(modes^))
-    var in_person = _cmp(tables.lineitem, "l_shipinstruct", BinaryOp.EQ, Value(String("DELIVER IN PERSON")))
+    var narrow = _in(tables.lineitem, "l_shipmode", modes)
+    narrow = _both(
+        narrow,
+        _cmp(
+            tables.lineitem,
+            "l_shipinstruct",
+            BinaryOp.EQ,
+            Value(String("DELIVER IN PERSON")),
+        ),
+    )
+    narrow = _both(
+        narrow,
+        _cmp(tables.lineitem, "l_quantity", BinaryOp.GE, Value(Float64(1.0))),
+    )
+    narrow = _both(
+        narrow,
+        _cmp(tables.lineitem, "l_quantity", BinaryOp.LE, Value(Float64(30.0))),
+    )
     var line_want: List[String] = [
         "l_partkey",
         "l_quantity",
         "l_extendedprice",
         "l_discount",
     ]
-    var lines = _keep(tables.lineitem, line_want, _both(shipped, in_person))
+    var lines = _keep(tables.lineitem, line_want, narrow)
+
+    var brands: List[String] = ["Brand#12", "Brand#23", "Brand#34"]
+    var boxes: List[String] = [
+        "SM CASE",
+        "SM BOX",
+        "SM PACK",
+        "SM PKG",
+        "MED BAG",
+        "MED BOX",
+        "MED PKG",
+        "MED PACK",
+        "LG CASE",
+        "LG BOX",
+        "LG PACK",
+        "LG PKG",
+    ]
+    var wanted = _both(
+        _in(tables.part, "p_brand", brands),
+        _in(tables.part, "p_container", boxes),
+    )
+    wanted = _both(
+        wanted, _cmp(tables.part, "p_size", BinaryOp.GE, Value(Int32(1)))
+    )
+    wanted = _both(
+        wanted, _cmp(tables.part, "p_size", BinaryOp.LE, Value(Int32(15)))
+    )
+    var part_want: List[String] = [
+        "p_partkey",
+        "p_brand",
+        "p_container",
+        "p_size",
+    ]
+    var parts = _keep(tables.part, part_want, wanted)
+
     var linepart: List[String] = ["l_partkey"]
     var partkey: List[String] = ["p_partkey"]
-    var joined = lines.join_on(tables.part, linepart^, partkey^)
+    var joined = lines.join_on(parts, linepart^, partkey^)
 
+    # Each disjunct still names its own container set and its own bounds. The
+    # bounds the pushed filters already guarantee are the ones left out: every
+    # surviving row has a size of at least one and a quantity between one and
+    # thirty, so only the upper size bound and the tighter quantity bounds are
+    # asked about again.
     var small_boxes: List[String] = ["SM CASE", "SM BOX", "SM PACK", "SM PKG"]
     var first = _both(
         _cmp(joined, "p_brand", BinaryOp.EQ, Value(String("Brand#12"))),
-        joined.column("p_container").is_in(_texts(small_boxes^)),
-    )
-    first = _both(
-        first, _cmp(joined, "l_quantity", BinaryOp.GE, Value(Float64(1.0)))
+        _in(joined, "p_container", small_boxes),
     )
     first = _both(
         first, _cmp(joined, "l_quantity", BinaryOp.LE, Value(Float64(11.0)))
     )
-    first = _both(first, _cmp(joined, "p_size", BinaryOp.GE, Value(Int32(1))))
     first = _both(first, _cmp(joined, "p_size", BinaryOp.LE, Value(Int32(5))))
 
     var medium: List[String] = ["MED BAG", "MED BOX", "MED PKG", "MED PACK"]
     var second = _both(
         _cmp(joined, "p_brand", BinaryOp.EQ, Value(String("Brand#23"))),
-        joined.column("p_container").is_in(_texts(medium^)),
+        _in(joined, "p_container", medium),
     )
     second = _both(
         second, _cmp(joined, "l_quantity", BinaryOp.GE, Value(Float64(10.0)))
@@ -1611,27 +1787,21 @@ def q19(ref tables: Tpch) raises -> DataFrame:
     second = _both(
         second, _cmp(joined, "l_quantity", BinaryOp.LE, Value(Float64(20.0)))
     )
-    second = _both(second, _cmp(joined, "p_size", BinaryOp.GE, Value(Int32(1))))
-    second = _both(second, _cmp(joined, "p_size", BinaryOp.LE, Value(Int32(10))))
+    second = _both(
+        second, _cmp(joined, "p_size", BinaryOp.LE, Value(Int32(10)))
+    )
 
     var large: List[String] = ["LG CASE", "LG BOX", "LG PACK", "LG PKG"]
     var third = _both(
         _cmp(joined, "p_brand", BinaryOp.EQ, Value(String("Brand#34"))),
-        joined.column("p_container").is_in(_texts(large^)),
+        _in(joined, "p_container", large),
     )
     third = _both(
         third, _cmp(joined, "l_quantity", BinaryOp.GE, Value(Float64(20.0)))
     )
-    third = _both(
-        third, _cmp(joined, "l_quantity", BinaryOp.LE, Value(Float64(30.0)))
-    )
-    third = _both(third, _cmp(joined, "p_size", BinaryOp.GE, Value(Int32(1))))
-    third = _both(third, _cmp(joined, "p_size", BinaryOp.LE, Value(Int32(15))))
 
     var kept = joined.filter(_either(_either(first^, second^), third^))
-    return _one(
-        "revenue", _reduced(_discounted(kept, "revenue"), AggKind.SUM)
-    )
+    return _one("revenue", _reduced(_discounted(kept, "revenue"), AggKind.SUM))
 
 
 def q20(ref tables: Tpch) raises -> DataFrame:
