@@ -78,6 +78,12 @@ env-report = "python tools/env_report.py"
 # validation output. A query that does not reproduce it is not in the table.
 validate-tpch = "python tools/validate_tpch.py"
 
+# The same job for ClickBench, which publishes no answers, so ten of the queries are
+# written again in plain Python and every port is checked against those instead.
+# Also recomputes which statements the data does not determine an answer for, since
+# that set changes with the size and cannot be typed in once.
+validate-clickbench = "python tools/validate_clickbench.py"
+
 # Checks a result file carries everything the report and the site need, and that
 # every pairing which did not run says why.
 validate-results = "python tools/validate_results.py"

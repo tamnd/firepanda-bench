@@ -73,6 +73,26 @@ REFERENCE = "pandas"
 # STATISTICAL for the one query that is a correlation. It is computed from the
 # moments in every engine here, which subtracts quantities of similar size, and the
 # last bits of that are not a fact about anything.
+#
+# There is no ClickBench entry, and the reason is worth keeping because it was
+# expected to need one. Issue #47 predicted that q3, `SELECT AVG(UserID) FROM hits`,
+# would need a class of its own: it averages sixty four bit integers that run up to
+# about two to the sixty three, in float64, over as many as a hundred million rows,
+# and the guess was that two honest summation orders would land further apart than
+# the one part in ten million the fingerprint allows.
+#
+# Measured instead of guessed, on the real 1M partition. The exact answer, from
+# summing the column as Python integers, is 1.9481948778949197e18. DuckDB, pandas
+# and Polars all land within about 2e-16 of each other, because all three reduce in
+# a tree rather than a line. An accumulator that did add in a line lands 4.17e-13
+# from the exact answer at 1M, and that error grows with the row count, so a hundred
+# times the rows puts it somewhere near 4e-12. ACCUMULATION is 1e-9, which covers
+# even that with room to spare, and the fingerprint's 1e-7 covers it with a great
+# deal more.
+#
+# So the prediction was five orders of magnitude out and no entry is needed. Written
+# down rather than deleted, because the next person to read q3 will have the same
+# worry and the useful thing to hand them is the number.
 DEFAULT_TOLERANCE = "ACCUMULATION"
 TOLERANCE: dict[tuple[str, str], str] = {
     ("db-benchmark", "q9"): "STATISTICAL",
@@ -217,10 +237,48 @@ def compat_revision(root: Path) -> str:
     return out.stdout.strip() or "unknown"
 
 
+def is_text(kind) -> bool:
+    """Whether a type is one of Arrow's three string layouts.
+
+    `pa.types.is_string` is only the 32 bit offset one, so asking it about a Polars
+    answer says no on every text column there is.
+
+    Args:
+        kind: The Arrow type.
+
+    Returns:
+        Whether it holds text.
+    """
+    for name in ("is_string", "is_large_string", "is_string_view"):
+        check = getattr(pa.types, name, None)
+        if check is not None and check(kind):
+            return True
+    return False
+
+
+def is_bytes(kind) -> bool:
+    """Whether a type is one of Arrow's binary layouts, fixed width excluded.
+
+    A fixed size binary is a declared width and two engines disagreeing about it are
+    disagreeing about the answer, so it is left alone.
+
+    Args:
+        kind: The Arrow type.
+
+    Returns:
+        Whether it holds bytes.
+    """
+    for name in ("is_binary", "is_large_binary", "is_binary_view"):
+        check = getattr(pa.types, name, None)
+        if check is not None and check(kind):
+            return True
+    return False
+
+
 def widen(table: pa.Table) -> pa.Table:
     """Casts away the representation choices an engine is allowed to make.
 
-    Four of them, and each one is a hole in this check as well as a fix for a false
+    Five of them, and each one is a hole in this check as well as a fix for a false
     alarm, so each is named here rather than being a line in a cast.
 
     **Integer width.** No query in this suite declares an output type, so a count
@@ -253,6 +311,17 @@ def widen(table: pa.Table) -> pa.Table:
     so this only matters when one side is a plain string column, which is the common
     case here.
 
+    **String width.** Arrow has three layouts for a string column, with 32 bit
+    offsets, with 64 bit offsets and as a view, and which one an engine hands back
+    is a fact about its internals rather than about the answer. Polars writes
+    `large_string` for every text column and pandas and DuckDB write `string`, so
+    before this the ClickBench queries that return a URL or a search phrase were
+    reported as a type difference on every engine pairing that included Polars,
+    which is 22 of the 43. Everything string shaped becomes `string` and everything
+    binary shaped becomes `binary`. What this gives up is the same thing the integer
+    width case gives up, and it belongs in the same place: a schema check, not an
+    answer check.
+
     **Date against timestamp.** pandas has no date dtype. A Parquet DATE comes back
     from it as datetime64 at midnight, while DuckDB and Polars keep it as a date,
     which is TPC-H `o_orderdate` in three queries. Dates become timestamps, which is
@@ -284,6 +353,10 @@ def widen(table: pa.Table) -> pa.Table:
             column = pc.cast(column, pa.float64())
         elif pa.types.is_date(kind):
             column = pc.cast(column, pa.timestamp("us"))
+        elif is_text(kind):
+            column = pc.cast(column, pa.string())
+        elif is_bytes(kind):
+            column = pc.cast(column, pa.binary())
         columns.append(column)
     return pa.Table.from_arrays(columns, names=table.column_names)
 

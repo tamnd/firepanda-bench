@@ -538,7 +538,7 @@ NARROW_SCHEMA = (
 
 
 # The queries whose answers the published statements do not determine, and how
-# many rows tie at the boundary the limit cuts on, measured at 1M.
+# many rows tie at the boundary the limit cuts on, at 1M.
 #
 # This is the fourth of the five traps in `suites/clickbench/README.md` and it is
 # the one that cannot be fixed by making the ports agree, because agreeing would
@@ -549,19 +549,21 @@ NARROW_SCHEMA = (
 # this data it often cannot: `WatchID` is nearly unique so almost every group in
 # q31 has a count of one, and q32 takes any ten rows of the table.
 #
-# The counts come from ranking the whole answer by its own ordering expression and
-# counting the rows sharing the boundary rank, which is a fact about the data and
-# so has to be measured rather than reasoned about. They were measured at 1M. The
-# set is a function of the size, since which rows tie at row ten depends on how
-# many rows there are, and #47 is where it gets computed against whichever dataset
-# a run actually used. Until then this list is the 1M answer and a lower bound
-# everywhere else, which is the right way round: a query that is treated as
-# determined when it is not produces a spurious disagreement, and one treated as
-# undetermined when it is determined loses a check on ten rows.
+# These are not typed in by hand. `tools/validate_clickbench.py` ranks the whole
+# answer by the query's own ordering expression, looks at every boundary the
+# statement has, and reports what it found against this table, so a size where the
+# set is different is a failure with the new numbers in it rather than a silent
+# wrong answer. The values below are 1M. The set is a function of the size, since
+# which rows tie at row ten depends on how many rows there are, and running the
+# validator at 10M or 100M is how the list for those sizes gets written.
 #
-# What stays checkable in all thirteen is the row count, the column set and the
+# A query with an OFFSET has two boundaries and either one can tie, which decides
+# the rows skipped as well as the rows kept. q40 is the only one where the two
+# counts differ and both are named below.
+#
+# What stays checkable in all twelve is the row count, the column set and the
 # types. An engine that answered with five rows, or with the wrong columns, is
-# still caught. That is weaker than the check the other thirty get and a great
+# still caught. That is weaker than the check the other thirty one get and a great
 # deal stronger than skipping them.
 CLICKBENCH_UNDETERMINED = {
     "q11": "3 groups tie at the row the limit cuts on",
@@ -570,13 +572,12 @@ CLICKBENCH_UNDETERMINED = {
     "q22": "4 groups tie at the row the limit cuts on",
     "q24": "4 rows tie at the row the limit cuts on",
     "q25": "19 rows tie at the row the limit cuts on",
-    "q26": "2 rows tie at the row the limit cuts on",
     "q30": "5 groups tie at the row the limit cuts on",
     "q31": "69,354 groups tie, since WatchID is nearly unique and almost every count is one",
     "q32": "every row ties, so the answer is any ten rows of the table",
-    "q38": "651 groups tie at the row the limit cuts on",
-    "q39": "177 groups tie at the row the limit cuts on",
-    "q40": "10 groups tie at the row the limit cuts on",
+    "q38": "651 groups tie at both the offset boundary and the row the limit cuts on",
+    "q39": "177 groups tie at both the offset boundary and the row the limit cuts on",
+    "q40": "13 groups tie at the offset boundary and 10 at the row the limit cuts on",
 }
 
 

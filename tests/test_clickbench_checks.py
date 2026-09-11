@@ -4,9 +4,9 @@
 quietly wrong. Two of them are decisions a port makes once and lives with, and the
 other three are things a future change could undo without anything going red,
 which is what these tests are for: the text columns arriving as text, the empty
-string staying an empty string, and the thirteen queries whose answers the
-published statements do not determine being compared on what the statements do
-determine rather than on what they do not.
+string staying an empty string, and the twelve queries whose answers the published
+statements do not determine being compared on what the statements do determine
+rather than on what they do not.
 """
 
 from __future__ import annotations
@@ -98,7 +98,7 @@ def test_the_undetermined_queries_are_real_queries():
     """A flag on a name no suite has is a flag that never fires."""
     names = {query.name for query in query_registry.for_suite("clickbench")}
     assert set(query_registry.CLICKBENCH_UNDETERMINED) <= names
-    assert len(query_registry.CLICKBENCH_UNDETERMINED) == 13
+    assert len(query_registry.CLICKBENCH_UNDETERMINED) == 12
 
 
 def test_the_flag_reaches_the_query_objects():

@@ -2,9 +2,21 @@
 
 All 43 queries over one table of 99,997,497 rows and 105 columns of real anonymized web analytics traffic, published by ClickHouse at [ClickHouse/ClickBench](https://github.com/ClickHouse/ClickBench).
 
+## Checking answers for a suite that publishes none
+
+TPC-H has the validation output the TPC publishes with the specification, and `pixi run validate-tpch` checks all 66 implementations against it cell by cell. That check found two real problems before any number here was published. ClickBench publishes no answers, so this suite starts without the strongest check the repository has.
+
+Three things stand in for it, and they are not equally strong.
+
+The cross engine fingerprint runs on every measurement and compares the row count, the sum of each numeric column and an order independent digest of each text column. It says the ports agree. It does not say any of them is right, and that is the whole difference from TPC-H: there, an engine that agrees with the other three and disagrees with the published answers is wrong, and here there is nothing to disagree with. DuckDB runs the published SQL unmodified so it is the closest thing to an authority, and it is also one of the four engines in the table.
+
+The exact check runs on a release. It reads every engine's answer back out of Arrow IPC and compares them row by row through the comparison layer in firepanda-compat, which cannot be fooled by a permutation the way a per column fingerprint can. All 43 pass at 1M across DuckDB, pandas and Polars, at the ACCUMULATION tolerance and with no registered differences. It is a stronger version of the same claim: the ports agree with each other more exactly than anybody thought to check.
+
+`pixi run validate-clickbench` is the one that is not about agreement. Ten of the queries are written again in `tools/clickbench_hand.py`, in plain Python over the raw Parquet columns, sharing no planner, no dataframe library, no group by kernel and no type conversion with anything they check. The answers are in [`expected/`](expected/), which has its own page on what each file holds and why those ten. The same command recomputes which statements the data does not determine an answer for, which is the fourth trap below and a fact about the size rather than about the query.
+
 ## Five ways a port of this suite is quietly wrong
 
-TPC-H has the validation output the TPC publishes with the specification, and `pixi run validate-tpch` checks all 66 implementations against it cell by cell. That check found two real problems before any number here was published. ClickBench publishes no answers, so this suite starts without the strongest check the repository has, and the traps have to be found by reading the queries rather than by running them.
+The traps have to be found by reading the queries rather than by running them, since running them is what produces the wrong answer that looks right.
 
 These five were written down before the ports were written rather than after. Each one produces a plausible table quickly, and a fast wrong answer is worse than no answer.
 
@@ -34,13 +46,19 @@ So nothing converts an empty string to a null anywhere in the loading path, and 
 
 q17 is `GROUP BY UserID, SearchPhrase LIMIT 10` with no order by at all. Thirty two of the 43 end `ORDER BY something LIMIT 10`, and the answer is determined only when the ordering expression can tell the last included row apart from the first excluded one. On this data it frequently cannot.
 
-That is a fact about the data rather than about the engine, so it can be computed: rank the whole answer by its own ordering expression and count the rows sharing the rank at the boundary. At the 1M size, thirteen queries have an undetermined answer. q26 has 2 rows tied at the cut, q11 has 3, q22 and q24 have 4, q18 and q30 have 5, q40 has 10, q25 has 19, q39 has 177, q38 has 651, q31 has 69,354 because `WatchID` is nearly unique so almost every group has a count of one, and q32 has all of them, which at that size means the answer is any ten rows of the table.
+That is a fact about the data rather than about the engine, so it can be computed rather than argued about: rank the whole answer by its own ordering expression and count the rows sharing the rank at the boundary. `pixi run validate-clickbench` does exactly that for all 43 and reports what it found against the list in `tools/queries.py`, so this is not a set somebody typed in once.
 
-This cannot be fixed by making the ports agree, because agreeing would mean adding an order by the query does not have and then measuring a different query. So those thirteen are flagged in `tools/queries.py`, the fingerprint comparison and the exact check both compare them on their row count and their column set rather than on their values, and both say so in their output. The report has its own section naming them, because a reader should be told which rows carry a weaker check rather than assume the suite is checked evenly.
+At 1M, twelve queries have an undetermined answer. q11 has 3 rows tied at the cut, q22 and q24 have 4, q18 and q30 have 5, q25 has 19, q39 has 177, q38 has 651, q31 has 69,354 because `WatchID` is nearly unique so almost every group has a count of one, and q32 has all of them, which at that size means the answer is any ten rows of the table. q17 has no ORDER BY at all. q40 is the one with different counts at its two boundaries, 13 and 10, which is the next paragraph.
 
-The set is a function of the size, since which rows tie at row ten depends on how many rows there are. The list in `tools/queries.py` was measured at 1M and #47 is where it gets computed against whichever dataset a run actually used.
+A statement with an OFFSET cuts twice and either cut can tie. A tie at the offset decides which rows are skipped just as a tie at the limit decides which are kept, and both make the answer the engine's choice. q38, q39, q40 and q42 all have an OFFSET, and q40 ties 13 rows at the offset boundary and 10 at the limit boundary, so a check that only looked at the limit would have found the smaller of the two.
 
-What is still checked in all thirteen is the row count, the column names and the column types, all of which the statements do determine. An engine that answered one of them with five rows, or lost a column, or answered with an integer where everybody else has a date, is still caught.
+q26 is the one this list used to get wrong. It ends `ORDER BY EventTime, SearchPhrase LIMIT 10` and it was written down as having 2 rows tied at the cut, which came from looking at `EventTime` alone. The two columns together separate the boundary rows, rows nine and ten are a duplicate pair that both fit inside the limit, and all three engines return the same ten rows. It was being compared on its shape alone for no reason, which is the cheaper of the two mistakes and still a lost check on ten rows.
+
+This cannot be fixed by making the ports agree, because agreeing would mean adding an order by the query does not have and then measuring a different query. So those twelve are flagged in `tools/queries.py`, the fingerprint comparison and the exact check both compare them on their row count and their column set rather than on their values, and both say so in their output. The report has its own section naming them, because a reader should be told which rows carry a weaker check rather than assume the suite is checked evenly.
+
+The set is a function of the size, since which rows tie at row ten depends on how many rows there are. The list in `tools/queries.py` is 1M. Running the validator at 10M or 100M is how the list for those sizes gets written, and it prints the numbers rather than only saying the list is wrong.
+
+What is still checked in all twelve is the row count, the column names and the column types, all of which the statements do determine. An engine that answered one of them with five rows, or lost a column, or answered with an integer where everybody else has a date, is still caught. For the four of them that are in [`expected/`](expected/) there is more: the values of the ordering key are determined even when which rows carry them is not, and every row an engine returned has to be a row of the full answer, which catches an engine that invented a row instead of picking a different legitimate one out of a tie.
 
 ### Five: exact against approximate distinct counts
 

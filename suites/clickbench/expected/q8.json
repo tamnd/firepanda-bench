@@ -1,0 +1,59 @@
+{
+  "query": "q8",
+  "size": "1M",
+  "note": "Every value of all 2 columns over 10 rows, computed by tools/clickbench_hand.py from the statement above and compared as a multiset, because the order of two rows with the same ordering key is the engine's choice.",
+  "statement": "SELECT RegionID, COUNT(DISTINCT UserID) AS u FROM hits GROUP BY RegionID ORDER BY u DESC LIMIT 10",
+  "columns": [
+    "RegionID",
+    "u"
+  ],
+  "rows_out": 10,
+  "determined": true,
+  "ties": {},
+  "checked": [
+    "RegionID",
+    "u"
+  ],
+  "answer": [
+    [
+      1,
+      1720
+    ],
+    [
+      107,
+      966
+    ],
+    [
+      158,
+      1110
+    ],
+    [
+      184,
+      987
+    ],
+    [
+      2,
+      10413
+    ],
+    [
+      208,
+      3073
+    ],
+    [
+      229,
+      27961
+    ],
+    [
+      34,
+      1428
+    ],
+    [
+      42,
+      956
+    ],
+    [
+      47,
+      943
+    ]
+  ]
+}

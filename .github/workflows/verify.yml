@@ -24,7 +24,7 @@ on:
       suite:
         description: Suite to verify
         type: choice
-        options: [db-benchmark, tpch, ingestion, all]
+        options: [db-benchmark, tpch, ingestion, clickbench, all]
         default: all
       engines:
         description: Comma-separated engine list
@@ -49,13 +49,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: ${{ (inputs.suite == 'all' || inputs.suite == '') && fromJSON('["db-benchmark","tpch","ingestion"]') || fromJSON(format('["{0}"]', inputs.suite)) }}
+        suite: ${{ (inputs.suite == 'all' || inputs.suite == '') && fromJSON('["db-benchmark","tpch","ingestion","clickbench"]') || fromJSON(format('["{0}"]', inputs.suite)) }}
         include:
           - suite: db-benchmark
             size: 0.05GB
           - suite: tpch
             size: sf1
           - suite: ingestion
+            size: 1M
+          - suite: clickbench
             size: 1M
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -99,5 +101,24 @@ jobs:
             echo "## ${SUITE} at ${SIZE}"
             echo '```'
             sed -n '/^exact check$/,$p' verify.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ClickBench only, because it is the one suite with no published answers to
+      # check against. The step above compares the engines with each other, which
+      # says they agree and not that they are right. This compares them against ten
+      # queries written again in plain Python, and recomputes which statements the
+      # data does not determine an answer for, which is a fact about the size and so
+      # cannot be settled once at 1M and believed at 100M.
+      - name: Check against the hand written answers
+        if: matrix.suite == 'clickbench'
+        env:
+          SIZE: ${{ matrix.size }}
+        run: |
+          pixi run validate-clickbench --engines "$ENGINES" --size "$SIZE" | tee hand.log
+          {
+            echo "## clickbench against the hand written answers at ${SIZE}"
+            echo '```'
+            cat hand.log
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

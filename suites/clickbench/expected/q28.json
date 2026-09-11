@@ -1,0 +1,35 @@
+{
+  "query": "q28",
+  "size": "1M",
+  "note": "Every value of all 4 columns over 2 rows, computed by tools/clickbench_hand.py from the statement above and compared as a multiset, because the order of two rows with the same ordering key is the engine's choice.",
+  "statement": "SELECT REGEXP_REPLACE(Referer, '^https?://(?:www\\.)?([^/]+)/.*$', '\\1') AS k, AVG(STRLEN(Referer)) AS l, COUNT(*) AS c, MIN(Referer) FROM hits WHERE Referer <> '' GROUP BY k HAVING COUNT(*) > 100000 ORDER BY l DESC LIMIT 25",
+  "columns": [
+    "k",
+    "l",
+    "c",
+    "min(Referer)"
+  ],
+  "rows_out": 2,
+  "determined": true,
+  "ties": {},
+  "checked": [
+    "k",
+    "l",
+    "c",
+    "min(Referer)"
+  ],
+  "answer": [
+    [
+      "state=19945206",
+      107.02601224350823,
+      287826,
+      "http://state=19945206/foto-4/login%20NoTs3M&where=all&filmId=u8aGGqtWs3M&where=all&server=sc.cheloveplanet.ru/forum.little&categoriya/muzhskaya_istory.com/demii-malchik_148_4055074241537][to]=&input_activalry: A Love&where=all&text=купить florer&aktion/loansert перевозобности&site_id=197&text=добавь   лазерногорский  тайская полупая автомобильника&v=1414-resp_desyachnyeprague"
+    ],
+    [
+      "tambov.irr.ru",
+      77.98700519338128,
+      308277,
+      "http://tambov.irr.ru/0/c1/tgFtaeLDK0yb01A7xvQF08sjCFqQxn51"
+    ]
+  ]
+}

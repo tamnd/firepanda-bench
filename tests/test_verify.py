@@ -142,6 +142,36 @@ def test_a_date_becomes_a_timestamp_because_pandas_has_no_date():
     assert widened.column("o_orderdate").type == pa.timestamp("us")
 
 
+def test_string_width_is_not_a_difference():
+    # Polars writes `large_string` for every text column and pandas and DuckDB
+    # write `string`, which is the same text in a wider offset. Before this the
+    # exact check reported a type difference on 22 of the 43 ClickBench queries,
+    # every one of them between two answers that held identical values.
+    table = pa.table({"SearchPhrase": pa.array(["a", "b"], pa.large_string())})
+    widened = verify.widen(table)
+    assert widened.column("SearchPhrase").type == pa.string()
+    assert widened.column("SearchPhrase").to_pylist() == ["a", "b"]
+
+
+def test_a_string_view_is_the_same_string():
+    view = getattr(pa, "string_view", None)
+    if view is None:
+        pytest.skip("this pyarrow has no string view")
+    table = pa.table({"URL": pa.array(["http://x.ru/a"], view())})
+    assert verify.widen(table).column("URL").type == pa.string()
+
+
+def test_binary_width_is_not_a_difference_either():
+    # No query in any suite answers with bytes today, and a reader that stopped
+    # converting the ClickBench text columns would produce some. Normalising both
+    # widths means that arrives as a value difference, which is what it is, rather
+    # than as a type difference that hides it.
+    table = pa.table({"raw": pa.array([b"ab"], pa.large_binary())})
+    widened = verify.widen(table)
+    assert widened.column("raw").type == pa.binary()
+    assert widened.column("raw").to_pylist() == [b"ab"]
+
+
 def test_widening_leaves_strings_and_booleans_where_they_are():
     table = pa.table({"id1": ["a"], "flag": [True]})
     widened = verify.widen(table)

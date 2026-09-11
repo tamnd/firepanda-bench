@@ -1,0 +1,20 @@
+{
+  "query": "q4",
+  "size": "1M",
+  "note": "Every value of all 1 columns over 1 rows, computed by tools/clickbench_hand.py from the statement above and compared as a multiset, because the order of two rows with the same ordering key is the engine's choice.",
+  "statement": "SELECT COUNT(DISTINCT UserID) FROM hits",
+  "columns": [
+    "count(DISTINCT UserID)"
+  ],
+  "rows_out": 1,
+  "determined": true,
+  "ties": {},
+  "checked": [
+    "count(DISTINCT UserID)"
+  ],
+  "answer": [
+    [
+      79842
+    ]
+  ]
+}

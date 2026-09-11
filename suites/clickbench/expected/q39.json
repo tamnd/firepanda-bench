@@ -1,0 +1,55 @@
+{
+  "query": "q39",
+  "size": "1M",
+  "note": "The PageViews column only, because 177 rows tie across the cut at 1000, 177 rows tie across the cut at 1010, so which rows carry those values is the engine's choice and the values themselves are not. Membership of each returned row in the full answer is checked separately, against the hand implementation rather than against this file.",
+  "statement": "SELECT TraficSourceID, SearchEngineID, AdvEngineID, CASE WHEN (SearchEngineID = 0 AND AdvEngineID = 0) THEN Referer ELSE '' END AS Src, URL AS Dst, COUNT(*) AS PageViews FROM hits WHERE CounterID = 62 AND EventDate >= '2013-07-01' AND EventDate <= '2013-07-31' AND IsRefresh = 0 GROUP BY TraficSourceID, SearchEngineID, AdvEngineID, Src, Dst ORDER BY PageViews DESC LIMIT 10 OFFSET 1000",
+  "columns": [
+    "TraficSourceID",
+    "SearchEngineID",
+    "AdvEngineID",
+    "Src",
+    "Dst",
+    "PageViews"
+  ],
+  "rows_out": 10,
+  "determined": false,
+  "ties": {
+    "1000": 177,
+    "1010": 177
+  },
+  "checked": [
+    "PageViews"
+  ],
+  "answer": [
+    [
+      10
+    ],
+    [
+      10
+    ],
+    [
+      10
+    ],
+    [
+      10
+    ],
+    [
+      10
+    ],
+    [
+      10
+    ],
+    [
+      10
+    ],
+    [
+      10
+    ],
+    [
+      10
+    ],
+    [
+      10
+    ]
+  ]
+}
