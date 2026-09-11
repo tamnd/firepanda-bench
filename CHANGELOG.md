@@ -4,6 +4,24 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### The report says how our ClickBench numbers differ from the published ones
+
+ClickHouse publishes a ClickBench results table and a methodology, and ours differs from it in five ways. Somebody is going to put one of our numbers next to one from that table, and the difference between the two is partly the engine and partly this list, so the list is now in the report, above the numbers, rather than in a commit message.
+
+The five: we report the median of ten runs with the interquartile range rather than the minimum of three; we run warm rather than publishing cold, warm and hot separately, because cold cache behaviour is measured by the ingestion suite with the page cache dropped and mixing it into a query suite makes every number in it partly a measurement of the filesystem; we do not report load time or data size on disk, for any suite, and the report says the column is absent rather than leaving it to be read as instant; the published table is one machine type and ours is two, neither of which is that one; and we run 1M and 10M, which are not ClickBench.
+
+A sixth difference is not about the harness. ClickHouse's published entry answers `COUNT(DISTINCT UserID)` with `uniq`, a HyperLogLog estimate, and every engine here counts exactly on all eight queries that touch it. That makes our numbers on those eight worse rather than better, which is why it is the one most likely to be misread.
+
+The report also says in as many words that these are not published ClickBench results and are not submitted to the ClickBench table. Submitting a firepanda entry upstream is the right end state and it needs a firepanda that reads Parquet on its own and runs all 43.
+
+### A partial ClickBench size is labelled where the numbers are
+
+1M and 10M exist for CI and for machines that cannot hold the hundred million row table. A number taken on one of them is not comparable to a published one, so the section heading says so and a line immediately above the table says so again. Not a footnote underneath, which is where a reader has already stopped.
+
+### check-sweep says when the answer behind a margin was checked weakly
+
+An implausible speedup is usually a query that read less data, and the answer check is what rules that out. On the twelve ClickBench queries whose answers the published statements do not determine, that check compares the row count and the columns and not the values, so it rules out less. A margin on one of those is now reported with the reason said out loud rather than reading like a margin on any other row.
+
 ### CI installs a locked environment, which it has never been able to do
 
 `.github/actions/setup-pixi` ends with `pixi install --locked`, which refuses to solve and needs the lock file to be there. `pixi.lock` was not committed and was not ignored either, so it sat untracked in every working copy looking deliberate. Every job that used that action failed at the setup step, which is all three jobs in the bench workflow and the whole verify workflow.

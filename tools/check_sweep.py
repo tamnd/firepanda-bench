@@ -20,7 +20,10 @@ says something the reader will not hear.
 A margin nobody should believe. Two hundred times faster than DuckDB on a group
 by is not an optimization, it is a query that read less data, and the answer
 digest agreeing does not rule that out when both engines were asked for a single
-row.
+row. Twelve of the 43 ClickBench queries are compared on their row count and
+their columns rather than on their values, because the published statement does
+not determine which rows come back, so on those the digest agreeing rules out
+even less. A margin on one of them is reported with that said out loud.
 
 A competitor that crashed. A pairing that failed is recorded with the reason
 rather than dropped, which is right, but "DuckDB raised a parser error" and
@@ -162,6 +165,13 @@ def review(document: dict) -> list[str]:
                     f"{query.name}: {SUBJECT} is {speedup:.0f}x faster than {other}, "
                     "which is past what a layout and a vector width explain. Check "
                     "that both engines materialized the same answer."
+                    + (
+                        " The answer check on this query is the weaker one, since "
+                        f"{query.undetermined}, so it compared the row count and "
+                        "the columns and not the values."
+                        if query.undetermined
+                        else ""
+                    )
                 )
 
     if ran and total and ran / total < MINIMUM_COVERAGE:

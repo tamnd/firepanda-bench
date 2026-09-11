@@ -66,6 +66,24 @@ ClickHouse's published entry answers `COUNT(DISTINCT UserID)` with `uniq`, which
 
 This does not affect our table, since all four of our engines are exact. It does affect anyone comparing our numbers against the published ones on q3, q4, q7, q8, q9, q10, q12 and q22, which is why it is written down. We count exactly everywhere and we do not reach for an estimate to improve a number.
 
+## Where our numbers differ from the published table
+
+ClickHouse publishes a results table and a methodology, and ours differs from it in five ways. None of the five makes a number here look better than it is, and all five are in the report as well as here, because somebody is going to put one of our numbers next to one from the public table and the difference between the two is partly the engine and partly this list.
+
+They report the minimum of three runs and we report the median of ten with the interquartile range in the result file. A minimum is the cleanest run the machine gave you and it is the standard in that table. A median with its spread is a measurement. Neither is wrong and they are not the same statistic.
+
+They run each query three times and publish cold, warm and hot separately, and we run warm. Cold cache behaviour is measured in the ingestion suite instead, with the page cache dropped between runs, because mixing it into a query suite makes every number in that suite partly a measurement of the filesystem.
+
+They report load time and data size on disk and we do not, for any suite. Both are real parts of the published table and neither is something this harness has ever measured. The report says the column is absent rather than leaving a reader to assume our engines loaded instantly.
+
+Their table is one machine type, c6a.4xlarge, and ours is two, neither of which is that one. We publish the AMD EPYC VPS and the i9-13900K desktop, never averaged, with the machine in the result file. The ratio between two of our own engines is the only thing that transfers between machines.
+
+We also run 1M and 10M, which are not ClickBench. They exist for CI and for machines that cannot hold the hundred million row table, and the report labels a partial size in the heading and again above the table rather than in a footnote underneath it.
+
+The sixth difference is not about the harness. It is the exact against approximate distinct count in the fifth trap above, and it costs us rather than helps us on all eight queries it touches.
+
+Submitting a firepanda entry upstream to ClickHouse/ClickBench is the right end state. It needs a firepanda that reads Parquet on its own and runs all 43, so not yet.
+
 ## Where the queries come from
 
 `suites/clickbench/queries.sql` is a byte for byte copy of what ClickHouse/ClickBench commits at `duckdb/queries.sql`, and nothing in this repository knows what any of them say. DuckDB runs each line with the semicolon removed, which is checked by a test, and the file's digest is pinned by another. The pandas and Polars ports were each written against that text and are compared against DuckDB's answer per query.

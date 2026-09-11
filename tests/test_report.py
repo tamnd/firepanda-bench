@@ -177,3 +177,79 @@ def test_the_memory_table_says_which_way_round_it_reads():
     same direction the compat cost matrix uses."""
     text = report.render(_with_subject(), Path("x.json"))
     assert "Above one is less memory used" in text
+
+
+def _clickbench(size: str) -> dict:
+    """Builds a ClickBench result document with one query and two engines.
+
+    Args:
+        size: The dataset size, which is what decides whether the numbers are
+            comparable to a published ClickBench one.
+
+    Returns:
+        The document.
+    """
+    return {
+        "suite": "clickbench",
+        "size": size,
+        "io": "memory",
+        "runs": 10,
+        "engines": {"pandas": "3.0.5", "duckdb": "1.1.3"},
+        "machine": {},
+        "results": {
+            "q0/pandas": {"ok": True, "median_s": 2.0, "peak_rss_bytes": 200},
+            "q0/duckdb": {"ok": True, "median_s": 1.0, "peak_rss_bytes": 100},
+        },
+        "agreement": {"q0": {"agreed": True, "by_engine": {}}},
+    }
+
+
+def test_the_report_says_these_are_not_published_clickbench_results():
+    """The sentence a reader needs before putting one of these next to a public one."""
+    text = report.render(_clickbench("100M"), Path("x.json"))
+    assert "not published ClickBench results" in text
+    assert "not submitted to the ClickBench table" in text
+
+
+def test_all_five_differences_are_in_the_report_and_not_only_in_a_readme():
+    """A report is read on its own, by somebody who never opened this repository."""
+    text = report.render(_clickbench("100M"), Path("x.json"))
+    for phrase in ("minimum of three runs", "runs warm", "Load time", "c6a.4xlarge", "size"):
+        assert phrase in text
+
+
+def test_the_report_says_our_distinct_counts_are_exact_and_theirs_are_not():
+    """The difference most likely to be misread, and the one that costs us."""
+    text = report.render(_clickbench("100M"), Path("x.json"))
+    assert "HyperLogLog" in text
+    assert "worse rather than better" in text
+
+
+def test_a_partial_size_is_labelled_where_the_numbers_are():
+    """In the heading and again above the table, not in a footnote under it."""
+    text = report.render(_clickbench("1M"), Path("x.json"))
+    heading = text.splitlines()[0]
+    assert "a partial size and not ClickBench" in heading
+    above = text[: text.index("| query |")]
+    assert "not comparable to a published one" in above
+
+
+def test_the_full_size_is_not_labelled_as_partial():
+    """100M is the hits table, so saying it is not ClickBench would be wrong."""
+    text = report.render(_clickbench("100M"), Path("x.json"))
+    assert "partial size and not ClickBench" not in text
+    assert "which is the full" in text
+
+
+def test_the_methodology_block_names_the_number_of_runs_the_file_actually_took():
+    """A block that said ten while the file says three would be the wrong claim."""
+    document = _clickbench("100M")
+    document["runs"] = 3
+    assert "the median of 3 runs" in report.render(document, Path("x.json"))
+    document["runs"] = 1
+    assert "the median of 1 run " in report.render(document, Path("x.json"))
+
+
+def test_another_suite_does_not_get_the_clickbench_block():
+    """It is a statement about one published table and it is wrong anywhere else."""
+    assert "c6a.4xlarge" not in report.render(_document(True), Path("x.json"))
