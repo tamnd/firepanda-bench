@@ -2,7 +2,11 @@
 
 Versions here track the harness, not the engines it measures and not firepanda itself. A change that alters what a published number means gets a minor bump, because a reader comparing two result files needs to know whether the measurement changed under them.
 
-## Unreleased
+## v0.3.1
+
+A patch, not a minor, and the rule at the top of the file is why. ClickBench is three twelfths built here: the data can be fetched, the 43 queries are in the registry under the published names, and DuckDB runs them. Nothing publishes a number yet, because a suite with one engine in it has nothing to compare, so no number a reader has ever seen means anything different after this. The minor bump comes when the suite has all four columns and a report to put them in.
+
+Two fixes in here do touch the existing suites and neither moves a published number. `engines.query_map` used to fall through to the db-benchmark callables for any suite it did not recognize, which was harmless right up until a fourth suite existed, and `column_sums` now casts unsafely so a sixty four bit hash column can go into the cross engine digest instead of raising. The sum that digest compares is rounded to nine significant figures, so nothing that agreed before disagrees now.
 
 ### DuckDB runs all 43 ClickBench queries, and the SQL is not ours
 
