@@ -34,7 +34,11 @@ import worker  # noqa: E402
 
 import engines  # noqa: E402
 
-duckdb_engine = pytest.importorskip("engines.duckdb_engine")
+# The vendored file, reached without going through the engine. The two tests that
+# matter most here are about a file on disk rather than about DuckDB, and asking
+# for the engine module to get at them would make them skip on a machine with no
+# DuckDB installed, which is the machine most likely to have got the copy wrong.
+VENDORED = Path(__file__).resolve().parent.parent / "suites" / "clickbench" / "queries.sql"
 
 # What ClickHouse/ClickBench commits at `duckdb/queries.sql`, as of b5b34de. The
 # file has not changed since November 2022. This is here so that an edit to the
@@ -43,21 +47,45 @@ duckdb_engine = pytest.importorskip("engines.duckdb_engine")
 PUBLISHED_DIGEST = "274ffe1c4f83baad2fc177bbb6773bbdab0db779faeb2970de8cc531292a5dc6"
 
 
+def engine():
+    """Imports the DuckDB engine, or skips the test that asked for it.
+
+    Per test rather than for the module, because most of what is checked here is
+    the vendored file and the type conversions, neither of which needs DuckDB
+    installed to be wrong.
+
+    Returns:
+        The engine module.
+    """
+    return pytest.importorskip("engines.duckdb_engine")
+
+
+def published_lines() -> list[str]:
+    """Reads the vendored file the way the engine reads it.
+
+    Returns:
+        The 43 statements, semicolons included.
+    """
+    return [line.strip() for line in VENDORED.read_text().splitlines() if line.strip()]
+
+
 def test_the_vendored_file_is_the_published_one():
     import hashlib
 
-    data = duckdb_engine.CLICKBENCH_SQL_PATH.read_bytes()
-    assert hashlib.sha256(data).hexdigest() == PUBLISHED_DIGEST
+    assert hashlib.sha256(VENDORED.read_bytes()).hexdigest() == PUBLISHED_DIGEST
+
+
+def test_the_file_holds_the_published_forty_three():
+    assert len(published_lines()) == 43
 
 
 def test_the_statements_are_lines_of_that_file_and_not_something_retyped():
     # The whole claim of this engine on this suite. Every statement DuckDB is given
     # is a line of the vendored file with its semicolon removed and nothing else
     # done to it, so there is no room for a transcription to have drifted.
-    lines = [line.strip() for line in duckdb_engine.CLICKBENCH_SQL_PATH.read_text().splitlines()]
-    lines = [line for line in lines if line]
-    assert len(lines) == 43
-    for index, line in enumerate(lines):
+    duckdb_engine = engine()
+    assert duckdb_engine.CLICKBENCH_SQL_PATH == VENDORED
+    for index, line in enumerate(published_lines()):
         assert duckdb_engine.CLICKBENCH_SQL[f"q{index}"] + ";" == line
 
 
@@ -65,11 +93,13 @@ def test_the_semicolon_comes_off_because_the_statement_gets_wrapped():
     # `run_sql` puts the text inside a `CREATE OR REPLACE TABLE ans AS`, and a
     # semicolon in the middle of that is a syntax error rather than a stray
     # character. This is why the file cannot be used byte for byte.
+    duckdb_engine = engine()
     for sql in duckdb_engine.CLICKBENCH_SQL.values():
         assert not sql.endswith(";")
 
 
 def test_every_registered_query_has_a_statement_and_nothing_extra_does():
+    duckdb_engine = engine()
     registered = {query.name for query in query_registry.CLICKBENCH}
     assert set(duckdb_engine.CLICKBENCH_QUERIES) == registered
 
@@ -78,6 +108,7 @@ def test_a_stale_vendored_file_is_refused_rather_than_run_short(tmp_path, monkey
     # A copy that lost a line would otherwise renumber every query after the gap,
     # and the run would look fine: 42 queries, all green, each one measuring the
     # query after the one its name says.
+    duckdb_engine = engine()
     short = tmp_path / "queries.sql"
     short.write_text("SELECT COUNT(*) FROM hits;\nSELECT 1;\n")
     monkeypatch.setattr(duckdb_engine, "CLICKBENCH_SQL_PATH", short)
@@ -87,6 +118,7 @@ def test_a_stale_vendored_file_is_refused_rather_than_run_short(tmp_path, monkey
 
 
 def test_the_suite_gets_its_own_callables_rather_than_db_benchmarks():
+    duckdb_engine = engine()
     assert engines.query_map(duckdb_engine, "clickbench") is duckdb_engine.CLICKBENCH_QUERIES
 
 
@@ -94,11 +126,13 @@ def test_a_suite_nobody_registered_is_an_error_and_not_a_db_benchmark_run():
     # This used to fall through to `QUERIES`, so a new suite whose wiring was
     # forgotten would have been handed the db-benchmark callables and reported an
     # engine that ran ten completely different queries under ClickBench's names.
+    duckdb_engine = engine()
     with pytest.raises(SystemExit):
         engines.query_map(duckdb_engine, "a-suite-that-does-not-exist")
 
 
 def test_the_scan_projection_converts_all_four_integer_columns():
+    duckdb_engine = engine()
     projection = duckdb_engine.CLICKBENCH_PROJECTION
     assert "make_date(EventDate)" in projection
     for column in clickbench.TIMESTAMP_COLUMNS:
@@ -222,6 +256,7 @@ def test_duckdb_runs_the_published_statements_against_a_real_file(tmp_path):
     # the three queries that between them touch every part of the setup: a date
     # comparison, a string pattern and a timestamp truncation. Against the file as
     # it is stored, without the conversions, all three are wrong or refused.
+    duckdb_engine = engine()
     duckdb = pytest.importorskip("duckdb")
     path = tmp_path / "hits_0.parquet"
     pq.write_table(hits_like(), path)
@@ -245,6 +280,7 @@ def test_both_io_modes_hand_the_queries_the_same_types(tmp_path):
     # The two modes get there by different routes, a projection in SQL and a cast
     # in Arrow, and the point of having both is that the query cannot tell which
     # one it got.
+    duckdb_engine = engine()
     pytest.importorskip("duckdb")
     pq.write_table(hits_like(), tmp_path / "hits_0.parquet")
     pattern = str(tmp_path / "hits_*.parquet")

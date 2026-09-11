@@ -35,8 +35,13 @@ jobs:
       # are the ones guarding the cross engine fingerprint, and a fingerprint
       # regression that only shows up as a skipped test is a fingerprint
       # regression that ships.
+      #
+      # duckdb for the same reason. It is the correctness oracle for two suites
+      # and it is the one engine that runs a benchmark's published SQL rather
+      # than a port of it, so the tests holding that arrangement in place are
+      # worth more than most and they cannot run without it installed.
       - name: Tests
-        run: uvx --with pytest --with pyarrow pytest -q
+        run: uvx --with pytest --with pyarrow --with duckdb pytest -q
 
       # Every result file must name every engine version and the Mojo toolchain that
       # compiled firepanda. A result that cannot say what produced it is not a result.
