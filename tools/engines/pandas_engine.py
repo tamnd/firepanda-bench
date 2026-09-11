@@ -13,12 +13,14 @@ question and every other engine is allowed to skip it too.
 
 from __future__ import annotations
 
+import clickbench
 import numpy as np
 import pandas as pd
 import pyarrow as pa
+import pyarrow.parquet as pq
 import queries
 
-from . import pandas_tpch
+from . import pandas_clickbench, pandas_tpch
 
 NAME = "pandas"
 
@@ -51,6 +53,8 @@ def load(paths: dict[str, str], suite: str = "db-benchmark", io: str = "memory")
     """
     if suite == "ingestion":
         return dict(paths)
+    if suite == "clickbench":
+        return load_clickbench(paths["hits"])
     # Arrow backed, because that is what pandas 3.0 recommends and what makes the
     # comparison one between engines rather than one between memory layouts.
     frames = {name: pd.read_parquet(path, dtype_backend="pyarrow") for name, path in paths.items()}
@@ -80,6 +84,32 @@ def load(paths: dict[str, str], suite: str = "db-benchmark", io: str = "memory")
                 elif pa.types.is_decimal(arrow_type):
                     frame[column] = frame[column].astype("double[pyarrow]")
     return frames
+
+
+def load_clickbench(pattern: str) -> dict:
+    """Reads the hits table, converted the way ClickBench's own loader converts it.
+
+    Two things make this different from every other suite here. The table is a
+    hundred Parquet files rather than one, so what arrives is a glob and it is
+    expanded in the numeric order the partitions were written in. And the file's
+    types are not the published schema's types: dates are a count of days, the
+    three timestamps are a count of seconds, and every text column is bytes with
+    no logical type on it.
+
+    The conversion is `clickbench.retype`, which is the same function the DuckDB
+    engine calls in memory mode, rather than a second implementation that would
+    have to be kept in step with it. It happens here rather than inside a query
+    because ClickBench's loader does it on the way in and the published numbers
+    are numbers for queries that ran against the converted types.
+
+    Args:
+        pattern: The glob matching the partitions of the hits table.
+
+    Returns:
+        A mapping with the one table in it.
+    """
+    table = clickbench.retype(pq.read_table(clickbench.partitions(pattern)))
+    return {"hits": table.to_pandas(types_mapper=pd.ArrowDtype)}
 
 
 def finish(frame: pd.DataFrame) -> pa.Table:
@@ -426,6 +456,34 @@ def _tpch(name: str):
 
 
 TPCH_QUERIES = {name: _tpch(name) for name in pandas_tpch.QUERIES}
+
+
+def _clickbench(name: str):
+    """Wraps one ClickBench query so it returns an Arrow table like everything else.
+
+    Args:
+        name: The query name.
+
+    Returns:
+        A callable taking the loaded tables.
+    """
+
+    def run(ctx: dict) -> pa.Table:
+        """Runs the query.
+
+        Args:
+            ctx: The loaded tables.
+
+        Returns:
+            The answer.
+        """
+        return finish(pandas_clickbench.QUERIES[name](ctx))
+
+    run.__name__ = f"clickbench_{name}"
+    return run
+
+
+CLICKBENCH_QUERIES = {name: _clickbench(name) for name in pandas_clickbench.QUERIES}
 
 
 # What `read_csv` is given. The pyarrow engine rather than the default one, which

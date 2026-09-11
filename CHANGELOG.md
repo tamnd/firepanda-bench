@@ -2,6 +2,32 @@
 
 Versions here track the harness, not the engines it measures and not firepanda itself. A change that alters what a published number means gets a minor bump, because a reader comparing two result files needs to know whether the measurement changed under them.
 
+## Unreleased
+
+### pandas answers all 43 ClickBench queries
+
+`pixi run bench --suite clickbench --engines duckdb,pandas --queries all` runs, and `tools/engines/pandas_clickbench.py` is 43 functions, one per published statement, each taking the loaded tables and handing back a frame. The loader is the same one DuckDB's memory path uses, which matters more than it sounds: the day conversion, the second conversion and the bytes to text conversion are one function called from both engines rather than two implementations that are supposed to agree.
+
+Every answer carries DuckDB's own column names in DuckDB's order. That is not cosmetic here, because `engines.digest` keys its sums and its hashes by column name, so a port that computed the right numbers under its own names would be reported as an engine disagreement and somebody would go looking for a bug in the aggregation.
+
+Against the real 1M partition, 32 of the 43 agree with DuckDB exactly. The other 11 are all inside the 13 the SQL does not determine an answer for, which is written up in full in issue #47, and for 10 of those 11 the ordering column agrees and only the tied payload behind it differs. So nothing in this port disagrees with DuckDB on a query that has an answer.
+
+### The parts of the port that a passing test would not have told us about
+
+`STRLEN` in DuckDB counts bytes. `Series.str.len` counts characters. On the real URL column the two averages are 88.56 and 86.57, which is over two percent, and both queries that use it sit behind a `HAVING COUNT(*) > 100000` that no fixture small enough for CI can reach through the query. The port counts bytes with `pyarrow.compute.binary_length` and there is a test that runs DuckDB's `STRLEN` beside it, plus a second test asserting the two counts differ on this fixture so the first one cannot quietly become a tautology. `Series.str.encode("utf-8").str.len()` is the obvious way to write it in pandas and it raises on an Arrow backed frame, which is a real gap rather than something being routed around for speed.
+
+Every sort passes `kind="stable"`. It does not make pandas agree with DuckDB on the 13 undetermined queries and it is not meant to. It makes the pandas answer to those queries the same on every run over the same data, which is the difference between a reference and a coin flip.
+
+Three queries are slower than they would be if the port were allowed to answer a different question. q29 is ninety separate sums because the statement asks for ninety separate sums. q28 runs Python's `re` once per row because DuckDB's `REGEXP_REPLACE` leaves a non matching string alone and pandas' vectorised replace has to be made to do the same thing. q23 sorts and slices rather than using `nsmallest`, so the row it keeps at a tie is the row a stable sort keeps. All three are the honest reading of the statement, and making a port quick by making it answer a smaller question is the failure this whole suite exists to catch.
+
+### The CI fixture is eight rows and it was made to have teeth
+
+Eight rows is fewer than any `LIMIT` in the suite, so every query returns everything that survives its filter and no query has to break a tie. That takes the 13 undetermined queries off the table and leaves the part that really is a contract, which is the filter, the grouping, the aggregates, the types and the names.
+
+It also takes two things out of range, and both get their own test rather than a note. Five queries page past row one thousand or row ten thousand and two drop every group under a hundred thousand rows, so on eight rows those seven return nothing at all and comparing them is comparing two empty frames. There is a second comparison that strips the last clause off both sides, the SQL by removing the `LIMIT` or the `HAVING` and the port by replacing the three functions it narrows through, and a test asserting that the pattern doing the stripping really does strike 32 statements so it cannot pass by matching nothing. Then, because the digest does not depend on row order, there is a third test that reads the limit, the offset and the sort direction back out of the published statement and checks them against the arguments the port actually passed.
+
+Whether any of that has teeth is a question you answer with numbers, so the port was mutated 34 ways, one at a time, with the whole file restored between each: `nunique` to `count`, `sum` to `max`, `min` to `max`, minute truncation to hour truncation, byte length to character length, a dropped value from an `IN` list, a sign flip, wrong limits, wrong offsets and flipped sort directions. Early rounds left four and then five of those alive, which is the honest state of a fixture written by eye. The values in it and the last of the three tests above are what those survivors were turned into, and the only mutant still standing is `COUNT(*)` written as `COUNT(ResolutionWidth)`, which no fixture shaped like the real table can catch, because neither this one nor the real `hits` has a null in that column.
+
 ## v0.3.1
 
 A patch, not a minor, and the rule at the top of the file is why. ClickBench is three twelfths built here: the data can be fetched, the 43 queries are in the registry under the published names, and DuckDB runs them. Nothing publishes a number yet, because a suite with one engine in it has nothing to compare, so no number a reader has ever seen means anything different after this. The minor bump comes when the suite has all four columns and a report to put them in.
