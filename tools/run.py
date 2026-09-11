@@ -46,7 +46,18 @@ DEFAULT_TIMEOUT_S = 3600
 # The size to run when none is named. Each is the smallest of its suite that is
 # worth publishing, which is the one that fits on a laptop and finishes over a
 # coffee.
-DEFAULT_SIZE = {"db-benchmark": "0.5GB", "tpch": "sf1", "ingestion": "10M"}
+#
+# ClickBench is the exception and its default is the smallest of the three rather
+# than the smallest worth publishing. Only its 100M size is comparable with a
+# published number and that size is a twelve gigabyte download, so defaulting to it
+# would mean a first run that spends an hour on the network before it says
+# anything.
+DEFAULT_SIZE = {
+    "db-benchmark": "0.5GB",
+    "tpch": "sf1",
+    "ingestion": "10M",
+    "clickbench": "1M",
+}
 
 # The io mode a suite runs in when none is named. Ingestion is scan and cannot be
 # anything else: its timed function is the read, and a memory mode for it would

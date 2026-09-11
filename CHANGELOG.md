@@ -4,6 +4,30 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### The 43 ClickBench queries are in the registry, under ClickBench's names
+
+`tools/queries.py` has a `CLICKBENCH` tuple now, and `pixi run bench --suite clickbench --queries all` resolves 43 queries. Nothing runs them yet. The registry is what has to exist before any port does, because it is the thing that lets us say four engines ran the same query.
+
+They are `q0` through `q42`, numbered from zero because ClickBench numbers from zero. Its own page pads the checkbox labels so `Q0..Q9` line up with the rest, every published result array is indexed from zero, and somebody reading our q22 next to a published q22 has to be looking at the same query. Worth being explicit about because the milestone issues described these queries by their line number in `queries.sql`, which is one higher throughout, and the registry follows the published numbering rather than the issues.
+
+The order is published order and it is not a progression. The group by suite walks from low cardinality to high and TPC-H walks through the specification, but ClickBench was assembled from a production query log, so it opens with a row count and then stops being a sequence. Reading it as one leads to picking the wrong query to look at.
+
+The `why` field is where the work went. Around half the suite is the same shape with a different key, which is the point rather than a redundancy, and the pairs only pay off if the registry says which query each one is a pair with. q12 and q13 are the same filter and the same key, one counting rows and one counting distinct users, so the gap between them is the cost of distinct counting and nothing else. q16 and q17 are the same group by with and without an ORDER BY, which is the one place an engine that always sorts gets caught. q31 and q32 are the same group by with and without a filter, and dropping the filter is what takes the group count from large to nearly one per row. q33 and q34 differ by a constant added to the grouping key, which a planner should be able to remove entirely.
+
+One group, called `clickbench`, rather than four categories. The queries do not partition: almost every one filters, groups and sorts at the same time, so any taxonomy would either put most of the suite in one bucket or need a query in three of them. Somebody who wants a subset names the queries.
+
+The default size is `1M` and not the published `100M`, which is a departure from the other three suites where the default is the smallest size worth publishing. Only `100M` is comparable with a published number and it is a twelve gigabyte download, so defaulting to it would mean a first run that spends an hour on the network before it says anything.
+
+### What each ClickBench query is made of, read off the SQL for now
+
+The 43 have operation declarations in `tools/operations.py`, and they are provisional in a way nothing else in that table is. Every other entry was read off a pandas implementation that already exists. These were read off the published SQL, because the pandas port is not written yet and the registry cannot land without them: the test that every query declares something walks the whole registry. They get re-derived from the port once it exists, and where the two are likely to disagree is the queries with more than one route through pandas, since a top ten is either `sort_values` then `head` or it is `nlargest`, and a global distinct count is either `nunique` or the length of `drop_duplicates`.
+
+This found six real holes in the firepanda-compat cost matrix. Counting distinct values of a whole column, a minimum over one, reading the minute out of a timestamp, a conditional expression, pulling a capture group out of a regular expression, and taking rows at an offset. None of those has a row over there and all six are operations a published benchmark query runs.
+
+Until now there was exactly one operation with no row and it was excluded on purpose rather than missing, so the report had one paragraph that covered both cases. It does not any more. The two are separated, the exclusions carry their reason in the table rather than in the rendering code, and a hole is described as a hole. Running them together would make the deliberate exclusion look like an excuse for the ones nobody has got to.
+
+One operation is newly excluded on purpose. q0 is `SELECT COUNT(*)` and nothing else, which on a frame that is already in memory reads the length of an index and touches no data, so there is nothing for a cost matrix row to measure. It is declared anyway, because a query declaring nothing looks like a query nobody got to. What q0 actually measures happens in scan mode, where the answer comes either out of Parquet metadata or out of a read, and that is a reader measurement rather than an operation one.
+
 ### The hits table can be fetched, and it is the first suite here whose data cannot be generated
 
 `tools/data.py --suite clickbench --size 1M` now downloads the ClickBench hits table. This is the fourth suite in the repository and the first one with no generator behind it at all.
@@ -23,6 +47,7 @@ Nothing converts to CSV. ClickBench publishes a TSV form, nobody benchmarks agai
 Verified end to end at the 1M size: 122,446,530 bytes, 1,000,000 rows, 105 columns, and a second run reuses the cache after checking every digest.
 
 No queries run yet. This is the data and the manifest only.
+
 
 ### The join set now has the character join the public suite has, and j4 and j5 are not the queries they were
 

@@ -10,8 +10,8 @@ a row per pandas operation, wall clock and peak resident set, against pandas on 
 million row corpus. Its operation table is published as a file with no numbers in it,
 and `cost-matrix.json` beside this module is a copy. Two things follow from that.
 A query that names the operations it is made of can be linked to the matching rows,
-and the set of operations the 37 queries touch becomes something that can be printed
-rather than something somebody would have to read 37 implementations to find out.
+and the set of operations the suites touch becomes something that can be printed
+rather than something somebody would have to read every implementation to find out.
 
 The declarations do not live in `queries.py` on purpose. That file says what a query
 is in words rather than in any engine's API, which is what makes it possible to say
@@ -28,6 +28,15 @@ and declaring `Series.corr` there would describe a query nobody runs.
 An operation with no matching row is not an error and it is not hidden. It is a hole
 in the cost matrix with a query attached to it, which is more useful than a complete
 looking table, and `pixi run operations` prints those separately.
+
+Until ClickBench arrived there was exactly one such name and it was excluded on
+purpose rather than missing. ClickBench added several that are genuinely missing:
+counting distinct values of a whole column, a minimum over one, reading the minute
+out of a timestamp, a conditional expression, pulling a capture group out of a
+regular expression, and taking rows at an offset. The report separates the two
+kinds now, because "the matrix has not measured this yet" and "the matrix will
+never measure this and here is why" are different statements and running them
+together makes the second one look like an excuse for the first.
 """
 
 from __future__ import annotations
@@ -259,6 +268,284 @@ DECLARED: dict[tuple[str, str], tuple[str, ...]] = {
     ("ingestion", "csv_wide"): ("pandas.read_csv",),
     ("ingestion", "csv_quoted"): ("pandas.read_csv",),
     ("ingestion", "csv_nulls"): ("pandas.read_csv",),
+    # ClickBench, and these are provisional in a way the rest of this table is not.
+    #
+    # Everything above was read off a pandas implementation that already existed.
+    # These were read off the published SQL, because the ClickBench pandas port does
+    # not exist yet and the registry cannot land without declarations: the test that
+    # every query declares something walks the whole registry. So they are a reading
+    # of what the SQL asks for rather than a record of what any code does, and they
+    # get re-derived from `engines/pandas_clickbench.py` once that is written.
+    #
+    # Where the two are likely to disagree is the queries with more than one route
+    # through pandas. A top ten is `sort_values` then `head` or it is `nlargest`. A
+    # global distinct count is `nunique` or it is `len(drop_duplicates())`. The
+    # reading here takes the obvious one and the port is allowed to pick otherwise
+    # and correct this.
+    ("clickbench", "q0"): ("DataFrame.__len__",),
+    ("clickbench", "q1"): ("DataFrame.loc", "DataFrame.__len__"),
+    ("clickbench", "q2"): ("Series.sum", "DataFrame.__len__", "Series.mean"),
+    ("clickbench", "q3"): ("Series.mean",),
+    ("clickbench", "q4"): ("Series.nunique",),
+    ("clickbench", "q5"): ("Series.nunique",),
+    ("clickbench", "q6"): ("Series.min", "Series.max"),
+    ("clickbench", "q7"): (
+        "DataFrame.loc",
+        "DataFrame.groupby",
+        "GroupBy.size",
+        "DataFrame.sort_values",
+    ),
+    ("clickbench", "q8"): (
+        "DataFrame.groupby",
+        "GroupBy.nunique",
+        "DataFrame.sort_values",
+        "DataFrame.head",
+    ),
+    ("clickbench", "q9"): (
+        "DataFrame.groupby",
+        "GroupBy.agg",
+        "GroupBy.sum",
+        "GroupBy.size",
+        "GroupBy.mean",
+        "GroupBy.nunique",
+        "DataFrame.sort_values",
+        "DataFrame.head",
+    ),
+    ("clickbench", "q10"): (
+        "DataFrame.loc",
+        "DataFrame.groupby",
+        "GroupBy.nunique",
+        "DataFrame.sort_values",
+        "DataFrame.head",
+    ),
+    ("clickbench", "q11"): (
+        "DataFrame.loc",
+        "DataFrame.groupby",
+        "GroupBy.nunique",
+        "DataFrame.sort_values",
+        "DataFrame.head",
+    ),
+    ("clickbench", "q12"): (
+        "DataFrame.loc",
+        "DataFrame.groupby",
+        "GroupBy.size",
+        "DataFrame.sort_values",
+        "DataFrame.head",
+    ),
+    ("clickbench", "q13"): (
+        "DataFrame.loc",
+        "DataFrame.groupby",
+        "GroupBy.nunique",
+        "DataFrame.sort_values",
+        "DataFrame.head",
+    ),
+    ("clickbench", "q14"): (
+        "DataFrame.loc",
+        "DataFrame.groupby",
+        "GroupBy.size",
+        "DataFrame.sort_values",
+        "DataFrame.head",
+    ),
+    ("clickbench", "q15"): (
+        "DataFrame.groupby",
+        "GroupBy.size",
+        "DataFrame.sort_values",
+        "DataFrame.head",
+    ),
+    ("clickbench", "q16"): (
+        "DataFrame.groupby",
+        "GroupBy.size",
+        "DataFrame.sort_values",
+        "DataFrame.head",
+    ),
+    # No sort. The absence is the query, so nothing is declared in its place.
+    ("clickbench", "q17"): ("DataFrame.groupby", "GroupBy.size", "DataFrame.head"),
+    ("clickbench", "q18"): (
+        "dt.minute",
+        "DataFrame.groupby",
+        "GroupBy.size",
+        "DataFrame.sort_values",
+        "DataFrame.head",
+    ),
+    ("clickbench", "q19"): ("DataFrame.loc",),
+    ("clickbench", "q20"): ("str.contains", "DataFrame.__len__"),
+    ("clickbench", "q21"): (
+        "str.contains",
+        "DataFrame.loc",
+        "DataFrame.groupby",
+        "GroupBy.agg",
+        "GroupBy.min",
+        "GroupBy.size",
+        "DataFrame.sort_values",
+        "DataFrame.head",
+    ),
+    ("clickbench", "q22"): (
+        "str.contains",
+        "DataFrame.loc",
+        "DataFrame.groupby",
+        "GroupBy.agg",
+        "GroupBy.min",
+        "GroupBy.size",
+        "GroupBy.nunique",
+        "DataFrame.sort_values",
+        "DataFrame.head",
+    ),
+    ("clickbench", "q23"): (
+        "str.contains",
+        "DataFrame.loc",
+        "DataFrame.sort_values",
+        "DataFrame.head",
+    ),
+    ("clickbench", "q24"): ("DataFrame.loc", "DataFrame.sort_values", "DataFrame.head"),
+    ("clickbench", "q25"): ("DataFrame.loc", "DataFrame.sort_values", "DataFrame.head"),
+    ("clickbench", "q26"): ("DataFrame.loc", "DataFrame.sort_values", "DataFrame.head"),
+    ("clickbench", "q27"): (
+        "str.len",
+        "DataFrame.loc",
+        "DataFrame.groupby",
+        "GroupBy.agg",
+        "GroupBy.mean",
+        "GroupBy.size",
+        "DataFrame.sort_values",
+        "DataFrame.head",
+    ),
+    ("clickbench", "q28"): (
+        "str.extract",
+        "str.len",
+        "DataFrame.loc",
+        "DataFrame.groupby",
+        "GroupBy.agg",
+        "GroupBy.mean",
+        "GroupBy.size",
+        "GroupBy.min",
+        "DataFrame.sort_values",
+        "DataFrame.head",
+    ),
+    ("clickbench", "q29"): ("Series.sum",),
+    ("clickbench", "q30"): (
+        "DataFrame.loc",
+        "DataFrame.groupby",
+        "GroupBy.agg",
+        "GroupBy.size",
+        "GroupBy.sum",
+        "GroupBy.mean",
+        "DataFrame.sort_values",
+        "DataFrame.head",
+    ),
+    ("clickbench", "q31"): (
+        "DataFrame.loc",
+        "DataFrame.groupby",
+        "GroupBy.agg",
+        "GroupBy.size",
+        "GroupBy.sum",
+        "GroupBy.mean",
+        "DataFrame.sort_values",
+        "DataFrame.head",
+    ),
+    ("clickbench", "q32"): (
+        "DataFrame.groupby",
+        "GroupBy.agg",
+        "GroupBy.size",
+        "GroupBy.sum",
+        "GroupBy.mean",
+        "DataFrame.sort_values",
+        "DataFrame.head",
+    ),
+    ("clickbench", "q33"): (
+        "DataFrame.groupby",
+        "GroupBy.size",
+        "DataFrame.sort_values",
+        "DataFrame.head",
+    ),
+    ("clickbench", "q34"): (
+        "DataFrame.assign",
+        "DataFrame.groupby",
+        "GroupBy.size",
+        "DataFrame.sort_values",
+        "DataFrame.head",
+    ),
+    ("clickbench", "q35"): (
+        "DataFrame.assign",
+        "DataFrame.groupby",
+        "GroupBy.size",
+        "DataFrame.sort_values",
+        "DataFrame.head",
+    ),
+    ("clickbench", "q36"): (
+        "DataFrame.loc",
+        "DataFrame.groupby",
+        "GroupBy.size",
+        "DataFrame.sort_values",
+        "DataFrame.head",
+    ),
+    ("clickbench", "q37"): (
+        "DataFrame.loc",
+        "DataFrame.groupby",
+        "GroupBy.size",
+        "DataFrame.sort_values",
+        "DataFrame.head",
+    ),
+    # `DataFrame.iloc` rather than `DataFrame.head` on the last five, because the
+    # offset is what makes them different from every other top ten in the suite and
+    # declaring head would hide exactly that.
+    ("clickbench", "q38"): (
+        "DataFrame.loc",
+        "DataFrame.groupby",
+        "GroupBy.size",
+        "DataFrame.sort_values",
+        "DataFrame.iloc",
+    ),
+    ("clickbench", "q39"): (
+        "DataFrame.loc",
+        "Series.where",
+        "DataFrame.groupby",
+        "GroupBy.size",
+        "DataFrame.sort_values",
+        "DataFrame.iloc",
+    ),
+    ("clickbench", "q40"): (
+        "DataFrame.loc",
+        "Series.isin",
+        "DataFrame.groupby",
+        "GroupBy.size",
+        "DataFrame.sort_values",
+        "DataFrame.iloc",
+    ),
+    ("clickbench", "q41"): (
+        "DataFrame.loc",
+        "DataFrame.groupby",
+        "GroupBy.size",
+        "DataFrame.sort_values",
+        "DataFrame.iloc",
+    ),
+    ("clickbench", "q42"): (
+        "dt.floor",
+        "DataFrame.loc",
+        "DataFrame.groupby",
+        "GroupBy.size",
+        "DataFrame.sort_values",
+        "DataFrame.iloc",
+    ),
+}
+
+# The operations the matrix does not measure on purpose, as opposed to the ones it
+# has simply not reached yet, and why each one is in here. Everything else with no
+# row is a hole, and the report says so in those words.
+EXCLUDED_ON_PURPOSE = {
+    "pandas.read_csv": (
+        "Reading a CSV is what the ingestion suite above measures, on five file shapes "
+        "against four engines, and the compat corpus is Arrow on disk rather than text, "
+        "so a row over there would be a worse version of a table that already exists."
+    ),
+    "DataFrame.__len__": (
+        "Counting the rows of a frame that is already in memory reads the length of an "
+        "index and touches no data, so there is nothing for a row to measure. It is "
+        "declared anyway because ClickBench q0 is that and nothing else, and a query "
+        "that declared nothing would look like a query nobody had got to. What q0 "
+        "actually measures is in scan mode, where the answer comes out of Parquet "
+        "metadata or out of a read, and that is a reader measurement rather than an "
+        "operation one."
+    ),
 }
 
 
@@ -365,24 +652,25 @@ def report() -> str:
     gaps = coverage()
     lines.append("## What the suites touch that the matrix does not measure")
     lines.append("")
-    if gaps["missing"]:
-        lines.append(", ".join(gaps["missing"]))
+    excluded = [name for name in gaps["missing"] if name in EXCLUDED_ON_PURPOSE]
+    holes = [name for name in gaps["missing"] if name not in EXCLUDED_ON_PURPOSE]
+    if not gaps["missing"]:
+        lines.append("Nothing. Every operation the suites touch has a row.")
+        return "\n".join(lines) + "\n"
+    if holes:
+        lines.append(", ".join(holes))
         lines.append("")
-        if set(gaps["missing"]) == {"pandas.read_csv"}:
-            lines.append(
-                "That one is a deliberate exclusion rather than a hole. Reading a CSV is "
-                "what the ingestion suite above measures, on five file shapes against four "
-                "engines, and the compat corpus is Arrow on disk rather than text, so a row "
-                "over there would be a worse version of a table that already exists."
-            )
-        else:
-            lines.append(
-                "Each of those is a pandas operation a published benchmark query runs and "
-                "the cost matrix has no row for. They are the rows the matrix should grow next."
-            )
-    else:
-        lines.append("Nothing. Every operation the 37 queries touch has a row.")
-    return "\n".join(lines) + "\n"
+        lines.append(
+            "Each of those is a pandas operation a published benchmark query runs and the "
+            "cost matrix has no row for. They are the rows the matrix should grow next."
+        )
+        lines.append("")
+    for name in excluded:
+        lines.append(f"{name} is a deliberate exclusion rather than a hole.")
+        lines.append("")
+        lines.append(EXCLUDED_ON_PURPOSE[name])
+        lines.append("")
+    return "\n".join(lines).rstrip("\n") + "\n"
 
 
 def main(argv: list[str] | None = None) -> int:

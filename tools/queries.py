@@ -45,8 +45,25 @@ judged on the second thing. The five files are different shapes rather than five
 sizes of one shape: narrow, narrow with the types declared instead of inferred,
 wide, quoted, and nine tenths empty.
 
-Query names collide between the suites, since both db-benchmark and TPC-H call
-their first query q1, so nothing here is looked up by bare name. The registry is
+ClickBench is the fourth suite and it is here for the reason the other three
+between them cannot cover: all of their data is generated. db-benchmark keys come
+out of a counter stream, TPC-H comes out of `dbgen`, the ingestion files come out
+of the same generator as db-benchmark, and every one of them is uniform by
+construction. The hits table is a dump of what a real product recorded, so the
+cardinalities are skewed, a handful of client addresses account for a large share
+of the rows, empty strings stand in for nulls, and there are 105 columns of which
+most queries touch three. Everything in this library has been tuned against
+uniform generated keys and this is the first data here that has none.
+
+The 43 are ClickBench's own, in its order and under its names, which start at
+zero. That order is not a progression the way the group by set is: the suite was
+assembled from a production query log, so it opens with a row count and then stops
+being a sequence. Around half of it is the same shape with a different key, which
+is the point, because it means the key is the variable and everything else is held
+still.
+
+Query names collide between the suites, since db-benchmark, TPC-H and ClickBench
+all call something q1, so nothing here is looked up by bare name. The registry is
 keyed by suite.
 """
 
@@ -515,6 +532,416 @@ NARROW_SCHEMA = (
     ("label", "string"),
 )
 
+
+def _cb(name: str, description: str, why: str, keys: tuple[str, ...] = ()) -> Query:
+    """Builds one ClickBench entry.
+
+    Args:
+        name: The query name, q0 through q42, matching ClickBench's numbering.
+        description: What it computes, in words.
+        why: What it is here to expose.
+        keys: The grouping key columns. Empty for a query that does not group.
+
+    Returns:
+        The query.
+    """
+    return Query(name, "clickbench", description, why, keys, ("hits",), suite="clickbench")
+
+
+# ClickBench's 43, in ClickBench's order and under ClickBench's names.
+#
+# The names start at zero because ClickBench's do. Its own page pads the checkbox
+# labels so that `Q0..Q9` line up with the rest, every published result array is
+# indexed from zero, and anybody reading our q22 next to a published q22 has to be
+# looking at the same query. Starting at one would be tidier here and wrong
+# everywhere it matters.
+#
+# The order is the published order and it is not a progression. db-benchmark walks
+# from low cardinality to high and TPC-H walks through the specification, but this
+# list was assembled from a production query log, so q0 is a row count and q1 is a
+# filtered row count and then it stops being a sequence. Reading it as one leads to
+# picking the wrong query to investigate.
+#
+# What the set actually contains, said once here rather than repeated in 43 `why`
+# fields: seven scalar aggregates, two global distinct counts, a couple of dozen
+# group bys almost all of which sort and take the top ten, five string queries,
+# five that take their ten rows at an offset, and one that reads every column.
+# Around half the suite is the same shape with a different key, which is the point:
+# the keys are the variable and everything else is held still.
+CLICKBENCH = (
+    _cb(
+        "q0",
+        "count every row",
+        "The floor, and not a trivial one on this suite. There is no column in it "
+        "at all, so what it measures is whether an engine answers from Parquet "
+        "metadata or reads something. In scan mode over twelve gigabytes the gap "
+        "between those two is the whole query.",
+    ),
+    _cb(
+        "q1",
+        "count the rows where AdvEngineID is not zero",
+        "The same count with one predicate on a narrow integer column. The gap "
+        "against q0 is the cost of touching one column out of 105, which is the "
+        "cleanest projection measurement in the suite.",
+    ),
+    _cb(
+        "q2",
+        "sum, count and average over two columns in one pass",
+        "Three aggregates over two columns with no grouping and no filter. An "
+        "engine that walks the table once per aggregate does three times the work "
+        "for the same answer, and there is nothing else in the query to hide it.",
+    ),
+    _cb(
+        "q3",
+        "average UserID",
+        "One average over a 64 bit column whose values are enormous. This is where "
+        "an engine that accumulates into the input type rather than a wider one "
+        "produces a different answer from everybody else, which the agreement "
+        "check sees before the timing does.",
+    ),
+    _cb(
+        "q4",
+        "count the distinct values of UserID",
+        "Exact distinct counting over a large integer domain, and the first of the "
+        "two queries in the suite where an engine can be fast by being wrong. "
+        "ClickBench permits an approximate answer here and several published "
+        "systems give one. We do not, and the report says so rather than putting "
+        "an approximate number next to an exact one.",
+    ),
+    _cb(
+        "q5",
+        "count the distinct values of SearchPhrase",
+        "The text twin of q4. The gap between them is what distinct counting costs "
+        "when the value is a variable length string rather than a machine word, "
+        "and that gap is the reason both are in the suite instead of one.",
+    ),
+    _cb(
+        "q6",
+        "minimum and maximum EventDate",
+        "Two reductions over a date column in one pass. Small, and worth having "
+        "because it is the only place the date type is measured on its own, "
+        "without a group by or a filter on top of it.",
+    ),
+    _cb(
+        "q7",
+        "count rows per AdvEngineID, ordered by the count",
+        "The smallest group by in the suite. There are fewer than a dozen groups "
+        "behind a filter that discards most of the table, so the result fits in a "
+        "register file and this is the group by overhead floor rather than a "
+        "measurement of grouping.",
+        ("AdvEngineID",),
+    ),
+    _cb(
+        "q8",
+        "distinct users per RegionID, top ten",
+        "Distinct counting per group rather than globally, which is a different "
+        "problem: one set per group instead of one set. An engine that reaches for "
+        "the same code path as q4 and runs it per group is doing something the "
+        "shape of the data does not support.",
+        ("RegionID",),
+    ),
+    _cb(
+        "q9",
+        "four aggregates including a distinct count per RegionID, top ten",
+        "q8 with three ordinary aggregates alongside the distinct count. The gap "
+        "between them says whether an engine can carry a distinct count in the "
+        "same pass as a sum and an average, or whether it splits the query.",
+        ("RegionID",),
+    ),
+    _cb(
+        "q10",
+        "distinct users per MobilePhoneModel, top ten",
+        "The first group by on a text key, behind a filter that keeps the rows "
+        "where the model is not the empty string. Empty string here means missing, "
+        "and it is not a null, which is the trap this query sets for a port that "
+        "reaches for a null check.",
+        ("MobilePhoneModel",),
+    ),
+    _cb(
+        "q11",
+        "distinct users per phone and model pair, top ten",
+        "q10 with a second key column in front of the first, and the two are "
+        "strongly correlated because a model implies its make. A grouping "
+        "implementation that treats the pair as two independent keys does more "
+        "hashing than the data justifies and this is where that shows.",
+        ("MobilePhone", "MobilePhoneModel"),
+    ),
+    _cb(
+        "q12",
+        "row count per SearchPhrase, top ten",
+        "A group by on a high cardinality text key, counting rows. Pairs with q13, "
+        "which is the same filter and the same key counting something else.",
+        ("SearchPhrase",),
+    ),
+    _cb(
+        "q13",
+        "distinct users per SearchPhrase, top ten",
+        "q12 with the count replaced by a distinct count. Same rows in, same "
+        "groups, same sort, same ten out. The difference between the two numbers "
+        "is the cost of distinct counting per group and of nothing else, which is "
+        "why the pair is worth more than either half.",
+        ("SearchPhrase",),
+    ),
+    _cb(
+        "q14",
+        "row count per engine and phrase pair, top ten",
+        "q12 with an integer key added in front of the text one. A mixed width "
+        "grouping key, which is the case a fixed width hash table has to widen for "
+        "and a row layout has to pad.",
+        ("SearchEngineID", "SearchPhrase"),
+    ),
+    _cb(
+        "q15",
+        "row count per UserID, top ten",
+        "A group by on a 64 bit key with very high cardinality and no filter, so "
+        "every row reaches the hash table. The distribution is real rather than "
+        "generated: a few users account for a large share of the rows and most "
+        "appear a handful of times, which is a probe length distribution nothing "
+        "else in this repository produces.",
+        ("UserID",),
+    ),
+    _cb(
+        "q16",
+        "row count per user and phrase pair, ordered by the count, top ten",
+        "q15 with a text column added to the key, so the grouping key is now a 64 "
+        "bit integer and a variable length string together and the hash table has "
+        "to carry both. Pairs with q17, which is this query with the ORDER BY "
+        "taken away and nothing else changed.",
+        ("UserID", "SearchPhrase"),
+    ),
+    _cb(
+        "q17",
+        "row count per user and phrase pair, any ten",
+        "q16 with no ORDER BY at all, which makes it the one query in the suite "
+        "that catches an engine sorting because it always sorts. The answer is "
+        "underdetermined by design, so this is also the query the agreement check "
+        "has to be told about rather than the one it can check.",
+        ("UserID", "SearchPhrase"),
+    ),
+    _cb(
+        "q18",
+        "row count per user, minute of EventTime and phrase, top ten",
+        "A three column grouping key where one column is computed. The minute has "
+        "to be extracted from a timestamp for every row before anything can be "
+        "grouped, so this measures a scalar function feeding a hash table rather "
+        "than either on its own.",
+        ("UserID", "EventTime minute", "SearchPhrase"),
+    ),
+    _cb(
+        "q19",
+        "select UserID where UserID equals one specific value",
+        "A point lookup with no aggregate and no index. Every engine here scans "
+        "for it, so what this measures is how quickly a hundred million "
+        "comparisons can be made and how little can be materialized on the way to "
+        "the handful of rows that match.",
+    ),
+    _cb(
+        "q20",
+        "count the rows whose URL contains google",
+        "A substring search over the widest text column in the table, run against "
+        "every row. No grouping and no sorting, which makes it the clean read on "
+        "matching throughput that q21 and q22 then build on.",
+    ),
+    _cb(
+        "q21",
+        "smallest URL and row count per SearchPhrase behind a substring filter, top ten",
+        "The first aggregate in the suite that reduces text rather than numbers. A "
+        "minimum over strings is a comparison per row that cannot be done in a "
+        "register, and an engine without one has to sort or materialize to get it.",
+        ("SearchPhrase",),
+    ),
+    _cb(
+        "q22",
+        "two text minima, a count and a distinct count per phrase, top ten",
+        "The heaviest of the string queries. Three predicates including a negated "
+        "substring match, two text minima and a distinct count, all per group. It "
+        "is also the query where predicate order matters most among the string "
+        "queries, since the phrase filter is far more selective than either "
+        "substring match and costs far less to evaluate.",
+        ("SearchPhrase",),
+    ),
+    _cb(
+        "q23",
+        "every column, filtered on a substring, sorted by time, top ten",
+        "The only query in the suite that selects all 105 columns. It is here to "
+        "catch an engine that materializes columns before it knows which rows "
+        "survive, because the filter keeps a small fraction of the table and the "
+        "limit keeps ten rows of that. Done well this touches two columns and then "
+        "gathers ten rows of the other 103. Done badly it is the whole dataset.",
+    ),
+    _cb(
+        "q24",
+        "ten search phrases, earliest first",
+        "A top ten by a sort key that is not the selected column. Small output, "
+        "and the first of three that differ only in what they sort by.",
+    ),
+    _cb(
+        "q25",
+        "ten search phrases in alphabetical order",
+        "q24 sorted by the text column instead of the timestamp. The gap between "
+        "them is the cost of ordering by a variable length value rather than a "
+        "fixed width one.",
+    ),
+    _cb(
+        "q26",
+        "ten search phrases by time then phrase",
+        "q24 and q25 combined into a two column sort. Worth having as a separate "
+        "query because a top n implementation that is fast on one key often "
+        "degrades to a full sort on two.",
+    ),
+    _cb(
+        "q27",
+        "average URL length per CounterID, big groups only, top twenty five",
+        "String length per row feeding an average per group, with a HAVING clause "
+        "over the group output. Two traps in one query. The length is a byte count "
+        "in the published SQL and a character count in pandas, and the URL column "
+        "is not ASCII, so a port that uses the obvious call gets a different "
+        "answer. And the HAVING is a filter over the small output rather than a "
+        "reason to do anything to the input.",
+        ("CounterID",),
+    ),
+    _cb(
+        "q28",
+        "average referer length per extracted host, big groups only, top twenty five",
+        "The hardest query in the suite to port and the only one that needs a "
+        "regular expression with a capture group. The grouping key is the host "
+        "pulled out of a URL by a substitution applied to every row, so the "
+        "expression runs a hundred million times before any grouping starts, and "
+        "it carries the same byte against character length trap as q27.",
+        ("extracted host",),
+    ),
+    _cb(
+        "q29",
+        "ninety sums over one column in one pass",
+        "Ninety aggregates over the same column with a different constant added to "
+        "each. Ninety intermediate arrays is the obvious answer and is what this "
+        "query exists to catch: done properly the column is read once and ninety "
+        "accumulators are updated per value, and the difference is not a "
+        "percentage.",
+    ),
+    _cb(
+        "q30",
+        "count, sum and average per engine and client address, top ten",
+        "A group by on a two column key where the second is an IP address, behind "
+        "a filter. Addresses in real traffic have a heavy head and a very long "
+        "tail, which is a load factor and probe length problem rather than a "
+        "cardinality one, and it is not a distribution any generator here "
+        "produces.",
+        ("SearchEngineID", "ClientIP"),
+    ),
+    _cb(
+        "q31",
+        "count, sum and average per watch and client address, filtered, top ten",
+        "q30 with WatchID in place of the engine, which is close to unique per "
+        "row. Behind the phrase filter, so the group count is large but not the "
+        "whole table. Pairs with q32, which drops the filter.",
+        ("WatchID", "ClientIP"),
+    ),
+    _cb(
+        "q32",
+        "count, sum and average per watch and client address, unfiltered, top ten",
+        "q31 with no filter, which makes the answer nearly as large as the input: "
+        "a hundred million rows in and close to that many groups out. This is the "
+        "query the hash table was written for and the one where the output build "
+        "stops being an afterthought and becomes most of the work.",
+        ("WatchID", "ClientIP"),
+    ),
+    _cb(
+        "q33",
+        "row count per URL, top ten",
+        "A group by on the widest text column in the table with no filter at all, "
+        "so every one of a hundred million URLs is hashed. The heaviest single "
+        "text key in the suite.",
+        ("URL",),
+    ),
+    _cb(
+        "q34",
+        "row count per constant and URL, top ten",
+        "q33 with a literal added as a grouping key. Every row has the same value "
+        "for it, so it adds nothing to the answer, and a planner that notices runs "
+        "this at the price of q33. The pair is a one line test of whether "
+        "expression simplification looks at group keys or only at filters.",
+        ("1", "URL"),
+    ),
+    _cb(
+        "q35",
+        "row count per client address and three expressions over it, top ten",
+        "A four column grouping key where three columns are arithmetic on the "
+        "first. Perfectly correlated by construction, so the number of groups is "
+        "exactly the number q30 would give on that column alone, and everything "
+        "beyond the first column is work the answer does not need. A naive tuple "
+        "hash pays for all four.",
+        ("ClientIP", "ClientIP - 1", "ClientIP - 2", "ClientIP - 3"),
+    ),
+    _cb(
+        "q36",
+        "page views per URL over one month, top ten",
+        "The first of the seven that filter hard before grouping. Five predicates, "
+        "and they are wildly different in selectivity: the counter equality keeps a "
+        "small fraction of the table and the refresh flag keeps most of it. "
+        "Evaluating them in written order costs several passes over columns the "
+        "first predicate already ruled out.",
+        ("URL",),
+    ),
+    _cb(
+        "q37",
+        "page views per Title over one month, top ten",
+        "q36 with Title as the key instead of URL. Same filter, same shape, a "
+        "different text column with a different length distribution, so the pair "
+        "separates the cost of the key from the cost of the filter.",
+        ("Title",),
+    ),
+    _cb(
+        "q38",
+        "page views per URL over one month, ten rows starting at a thousand",
+        "The first query in the suite with an OFFSET, which nothing else in this "
+        "repository has. It is not a top ten with a different starting point: the "
+        "engine has to produce a thousand and ten rows in order and then discard a "
+        "thousand, so a top n structure sized for the limit is the wrong "
+        "structure.",
+        ("URL",),
+    ),
+    _cb(
+        "q39",
+        "page views per traffic source, referer and URL, ten rows starting at a thousand",
+        "A five column grouping key where one column is a conditional expression "
+        "over two others, so a branch per row feeds the hash table. It is also the "
+        "only place in the suite where a text column and a literal empty string "
+        "meet in the same expression, which forces a decision about what type that "
+        "expression has.",
+        ("TraficSourceID", "SearchEngineID", "AdvEngineID", "Src", "Dst"),
+    ),
+    _cb(
+        "q40",
+        "page views per URL hash and date for one referer, ten rows starting at a hundred",
+        "Seven predicates including an equality against a single 64 bit hash out "
+        "of a hundred million rows. If that predicate runs first the query touches "
+        "almost nothing and if it runs last the query touches everything several "
+        "times, which makes this the most extreme predicate ordering case in the "
+        "suite.",
+        ("URLHash", "EventDate"),
+    ),
+    _cb(
+        "q41",
+        "page views per window size for one URL, ten rows starting at ten thousand",
+        "q40's shape with the largest offset in the suite. Ten thousand rows "
+        "discarded to return ten, behind a filter that leaves very few rows to "
+        "begin with, so an engine that gets the predicate order right may not have "
+        "ten thousand rows to skip at all.",
+        ("WindowClientWidth", "WindowClientHeight"),
+    ),
+    _cb(
+        "q42",
+        "page views per minute over two days, ten rows starting at a thousand",
+        "The last query, and the only one that groups by a truncated timestamp. "
+        "Truncating to the minute is a scalar function over a date type feeding a "
+        "grouping key, the filter narrows to two days, and the sort is on the "
+        "computed key rather than on the count, which is the one place in the "
+        "suite where that is true.",
+        ("EventTime truncated to the minute",),
+    ),
+)
+
 # Every suite the harness knows how to run, and the queries in each. The names
 # collide across suites on purpose, because renaming TPC-H's q1 would make the
 # result file harder to check against a published one.
@@ -522,13 +949,21 @@ SUITES = {
     "db-benchmark": DB_BENCHMARK,
     "tpch": TPCH,
     "ingestion": INGESTION,
+    "clickbench": CLICKBENCH,
 }
 
 # The groups a `--queries` argument may name, per suite.
+#
+# ClickBench gets one group with the suite's own name rather than four categories,
+# because the queries do not partition. Almost every one of them filters, groups
+# and sorts at the same time, so any taxonomy would either put most of the suite in
+# one bucket or need a query to be in three of them. A reader who wants a subset
+# names the queries.
 GROUPS = {
     "db-benchmark": ("groupby", "join"),
     "tpch": ("tpch",),
     "ingestion": ("csv",),
+    "clickbench": ("clickbench",),
 }
 
 
