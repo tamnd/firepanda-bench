@@ -4,6 +4,10 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+## v0.3.5
+
+A patch. Nothing here changes what a published number means and no result file a reader has ever seen reads differently after it. What changed is what a reader sees when they arrive: the READMEs now carry the numbers, and ClickBench is on the front page.
+
 ### ClickBench is documented like a suite somebody has to run, and the front page admits it exists
 
 The suite had a README covering the five ways a port of it goes quietly wrong and the five ways our methodology differs from the published table, which is the hard part, and it never said the easy part. It did not say what the suite is for next to the three that were already here, where the data comes from, which engines run it, what the two io modes cost on a table with 105 columns, or which queries are worth looking at first. Those five sections are there now, along with a license note, because a reader arriving at a suite wants to know what it measures before they want to know how a port of it goes wrong.
@@ -47,6 +51,7 @@ The point of declaring operations is that the last column of the table is a hole
 Coverage is keyed by pandas name and the matrix is keyed by row, and a name can carry two rows with different costs. The matrix already has a literal `str.contains` and a regular expression one for that reason. Two ClickBench operations land on the wrong side of it: q27 and q28 need a byte length where the row measures characters, and q28 runs a regular expression with a capture group where the row replaces a literal, which is a per row trip through Python's `re` against a vectorized kernel.
 
 Those are now listed on their own rather than folded into either the covered set or the holes. Counting them as measured would be claiming more than is known and counting them as missing would be wrong.
+
 ## v0.3.4
 
 A patch. Nothing here changes what a published number means and no result file a reader has ever seen reads differently after it. What changed is whether a reader can read the ClickBench report at all, and whether the suite runs without somebody starting it by hand.
