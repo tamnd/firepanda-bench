@@ -8,10 +8,20 @@ measures planning.
 The tables are registered as Arrow views rather than copied into DuckDB storage,
 so the load step costs what it costs everyone else and the query is not being run
 against a format nobody else was given.
+
+ClickBench is the one suite where the SQL is not written here. TPC-H already gets
+its statements from DuckDB's own extension rather than from anything typed in this
+repository, for the obvious reason that a benchmark you transcribed is a benchmark
+you can get wrong in your favour. ClickBench publishes no extension, so its 43
+statements are vendored verbatim under `suites/clickbench/queries.sql` and read
+from there. Nothing in this file knows what any of them say.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import clickbench
 import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -72,6 +82,8 @@ def load(paths: dict[str, str], suite: str = "db-benchmark", io: str = "memory")
     if suite == "tpch":
         connection.execute("INSTALL tpch")
         connection.execute("LOAD tpch")
+    if suite == "clickbench":
+        return load_clickbench(connection, paths["hits"], io)
     if io == "scan":
         for name, path in paths.items():
             # The path is inlined rather than bound. DuckDB refuses to prepare a
@@ -92,6 +104,61 @@ def load(paths: dict[str, str], suite: str = "db-benchmark", io: str = "memory")
     for name, table in tables.items():
         connection.register(name, table)
     return {"con": connection, "tables": tables}
+
+
+# The published schema, expressed as a projection over what the file actually
+# holds. `make_date` on a count of days and `epoch_ms` on a count of seconds are
+# ClickBench's own conversions, copied from its DuckDB loader rather than worked
+# out here, and `clickbench.retype` is the same four conversions in Arrow for the
+# side that loads into memory first.
+CLICKBENCH_PROJECTION = (
+    "* REPLACE ("
+    "make_date(EventDate) AS EventDate, "
+    "epoch_ms(EventTime * 1000) AS EventTime, "
+    "epoch_ms(ClientEventTime * 1000) AS ClientEventTime, "
+    "epoch_ms(LocalEventTime * 1000) AS LocalEventTime)"
+)
+
+
+def load_clickbench(connection, pattern: str, io: str) -> dict:
+    """Registers the hits table under the types the published queries expect.
+
+    Both modes end with a `hits` whose columns have the same types, which is the
+    whole point of the function. In scan mode that means a view with the
+    conversions in its projection, where DuckDB can push the filter and the column
+    list into the Parquet reader and do them on the rows that survive. In memory
+    mode the conversion happens in Arrow before the table is registered, so the
+    timed region does not include it.
+
+    Doing it in Arrow rather than wrapping the registered table in the same view is
+    deliberate. A view over an Arrow table would cast a hundred million binary
+    values to text inside every one of the 43 timed queries, which is work no other
+    engine is doing and which would land in the number as if it were query
+    execution.
+
+    `binary_as_string` is what turns the text columns into text. Without it six of
+    the 43 fail to bind at all and another nine answer with bytes where they should
+    answer with strings, and the second group is the dangerous one: the row counts
+    are right, the values are right, and the digest this harness compares engines on
+    hashes bytes and text the same way, so the agreement check passes.
+
+    Args:
+        connection: The open DuckDB connection.
+        pattern: The partition glob for the hits table.
+        io: How the table should reach the engine.
+
+    Returns:
+        A context holding the connection and keeping the Arrow table alive.
+    """
+    if io == "scan":
+        connection.execute(
+            f"CREATE OR REPLACE VIEW hits AS SELECT {CLICKBENCH_PROJECTION} "
+            f"FROM read_parquet('{sql_literal(pattern)}', binary_as_string=True)"
+        )
+        return {"con": connection, "tables": {}}
+    table = clickbench.retype(pq.read_table(clickbench.partitions(pattern)))
+    connection.register("hits", table)
+    return {"con": connection, "tables": {"hits": table}}
 
 
 def run_sql(ctx: dict, sql: str) -> pa.Table:
@@ -267,6 +334,78 @@ def _make_tpch(name: str):
 
 
 TPCH_QUERIES = {name: _make_tpch(name) for name in TPCH_SQL}
+
+
+# The vendored copy of ClickBench's `duckdb/queries.sql`. Byte identical to the
+# file that repository commits, so refreshing it is a copy and a diff means the
+# benchmark changed. It has not changed since November 2022. Refresh with:
+#
+#   curl -fsSL https://raw.githubusercontent.com/ClickHouse/ClickBench/main/duckdb/queries.sql \
+#     -o suites/clickbench/queries.sql
+#
+# Vendored rather than fetched, for the same reason `tools/cost-matrix.json` is: a
+# benchmark whose queries arrive over the network is a benchmark that measures
+# something different depending on the day you ran it.
+CLICKBENCH_SQL_PATH = Path(__file__).resolve().parents[2] / "suites" / "clickbench" / "queries.sql"
+
+
+def clickbench_sql() -> dict[str, str]:
+    """Reads the published statements out of the vendored file.
+
+    One statement per line, in published order, which is the format the file is in
+    and the reason it can be used as it stands rather than parsed. The trailing
+    semicolon comes off because `run_sql` wraps the text in a `CREATE TABLE ans AS`
+    and a semicolon in the middle of that is a syntax error.
+
+    Returns:
+        A mapping from `q0` through `q42` to the statement.
+
+    Raises:
+        SystemExit: If the file does not hold 43 statements, which means the copy
+            is stale or somebody edited it.
+    """
+    statements = [
+        line.strip().rstrip(";")
+        for line in CLICKBENCH_SQL_PATH.read_text().splitlines()
+        if line.strip()
+    ]
+    if len(statements) != 43:
+        raise SystemExit(
+            f"{CLICKBENCH_SQL_PATH} holds {len(statements)} statements and ClickBench "
+            "publishes 43. Refresh it from the URL in the comment above."
+        )
+    return {f"q{index}": statement for index, statement in enumerate(statements)}
+
+
+CLICKBENCH_SQL = clickbench_sql()
+
+
+def _make_clickbench(name: str):
+    """Builds the callable for one ClickBench query.
+
+    Args:
+        name: The query name.
+
+    Returns:
+        A function taking the context and returning the answer.
+    """
+
+    def run(ctx: dict) -> pa.Table:
+        """Runs the query.
+
+        Args:
+            ctx: The context from `load`.
+
+        Returns:
+            The answer.
+        """
+        return run_sql(ctx, CLICKBENCH_SQL[name])
+
+    run.__name__ = f"clickbench_{name}"
+    return run
+
+
+CLICKBENCH_QUERIES = {name: _make_clickbench(name) for name in CLICKBENCH_SQL}
 
 
 # The neutral names in `queries.NARROW_SCHEMA`, in DuckDB.

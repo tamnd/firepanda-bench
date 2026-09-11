@@ -57,6 +57,33 @@ BASE_URL = "https://datasets.clickhouse.com/hits_compatible/athena_partitioned"
 # one and the report labels it on the table rather than in a footnote.
 SIZES = {"1M": 1, "10M": 10, "100M": 100}
 
+# How a path to this dataset is written, since it is the only one here that is more
+# than one file per table. `table_paths` hands an engine `hits_*.parquet` rather than
+# a single name, DuckDB reads that pattern as it stands, and everything else expands
+# it with `partitions` below so that all four engines read the same files in the same
+# order.
+PARTITION_GLOB = "{table}_*.parquet"
+
+# What the file stores against what the published schema says it holds.
+#
+# `EventDate` is an unsigned sixteen bit count of days since the epoch and the
+# schema calls it a DATE. The three `*EventTime` columns are signed sixty four bit
+# counts of seconds and the schema calls them TIMESTAMP. Every text column is
+# BYTE_ARRAY with no logical type on it, so a reader that believes the file gets
+# binary where the schema says VARCHAR.
+#
+# None of that is a detail of the Parquet encoding that a reader may reasonably
+# ignore. ClickBench's own DuckDB loader converts all four integer columns on the
+# way in and passes `binary_as_string`, and the published numbers are numbers for
+# queries that ran against the converted types. An engine here that skips any of it
+# is not running the benchmark.
+#
+# Only `EventDate` and `EventTime` are named by the 43 queries. The other two are
+# converted anyway because q23 selects all 105 columns, which puts their type in an
+# answer that four engines have to agree on.
+DATE_COLUMN = "EventDate"
+TIMESTAMP_COLUMNS = ("EventTime", "ClientEventTime", "LocalEventTime")
+
 # The published row count of the whole dataset, for checking that a full download
 # is actually the full dataset. Partial sizes have no published count, so their
 # row counts are measured and recorded rather than checked.
@@ -223,6 +250,88 @@ def describe(path: Path) -> dict:
         "rows": metadata.num_rows,
         "columns": metadata.num_columns,
     }
+
+
+def partitions(pattern: str) -> list[str]:
+    """Expands a partition pattern into the files it names, in partition order.
+
+    Sorted numerically rather than lexically, because `sorted` puts `hits_10`
+    before `hits_2` and at the hundred partition size that silently reorders the
+    rows. No query in the suite has an answer that depends on row order, so the
+    wrong order would not show up as a wrong answer; it would show up as two
+    engines disagreeing on a query where both of them are right.
+
+    Args:
+        pattern: A glob, as `table_paths` writes it.
+
+    Returns:
+        The partition paths, ordered by partition number.
+
+    Raises:
+        SystemExit: If the pattern matches nothing, which means the dataset was
+            never downloaded.
+    """
+    import re
+
+    directory = Path(pattern).parent
+    found = list(directory.glob(Path(pattern).name))
+    if not found:
+        raise SystemExit(
+            f"no partitions at {pattern}. Run: python tools/data.py --suite clickbench"
+        )
+
+    def number(path: Path) -> int:
+        """Reads the partition number out of a file name.
+
+        Args:
+            path: The partition.
+
+        Returns:
+            The number, or -1 for a name with no number in it.
+        """
+        match = re.search(r"_(\d+)\.parquet$", path.name)
+        return int(match.group(1)) if match else -1
+
+    return [str(path) for path in sorted(found, key=number)]
+
+
+def retype(table):
+    """Puts a partition into the types the published schema says it has.
+
+    The file is honest about what it stores and the schema is what the queries were
+    written against, so somebody has to reconcile the two. ClickBench does it in its
+    loader; this does it here, once, so that pandas, Polars and DuckDB all start
+    from the same values rather than from three readings of the same file.
+
+    Binary becomes text, the day count becomes a date and the second counts become
+    microsecond timestamps. Microseconds rather than seconds because that is what
+    DuckDB's TIMESTAMP is, and an engine answering in seconds and one answering in
+    microseconds would be made to look like a disagreement about the answer.
+
+    Args:
+        table: The partition as Arrow, straight out of the Parquet reader.
+
+    Returns:
+        The same rows under the published schema.
+    """
+    import pyarrow as pa
+
+    original = table.schema
+    for index, field in enumerate(original):
+        column = table.column(field.name)
+        if pa.types.is_binary(field.type) or pa.types.is_large_binary(field.type):
+            converted = column.cast(pa.string())
+        elif field.name == DATE_COLUMN:
+            # Through int32 because Arrow will not cast uint16 straight to a date32
+            # and a date32 is an int32 count of days, which is what the column
+            # already is.
+            converted = column.cast(pa.int32()).cast(pa.date32())
+        elif field.name in TIMESTAMP_COLUMNS:
+            converted = column.cast(pa.timestamp("s")).cast(pa.timestamp("us"))
+        else:
+            continue
+        table = table.set_column(index, pa.field(field.name, converted.type), converted)
+    return table
 
 
 def check_room(needed: int, out: Path) -> None:

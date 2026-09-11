@@ -4,6 +4,22 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### DuckDB runs all 43 ClickBench queries, and the SQL is not ours
+
+`pixi run bench --suite clickbench --engines duckdb --queries all` runs. The statements come out of `suites/clickbench/queries.sql`, which is a byte for byte copy of what ClickHouse/ClickBench commits at `duckdb/queries.sql` and has not changed there since November 2022. Nothing in this repository knows what any of them say. That follows what TPC-H already does, where the statements come from DuckDB's own extension rather than from anything typed here, and for the same reason: a benchmark you transcribed is a benchmark you can get wrong in your favour. A test pins the digest of the vendored file and a second one pins that every statement handed to DuckDB is a line of it with the semicolon removed.
+
+The setup is where this suite is easy to get quietly wrong, and it is three separate conversions rather than one. `EventDate` in the file is an unsigned sixteen bit count of days and the published schema calls it a date. `EventTime`, `ClientEventTime` and `LocalEventTime` are counts of seconds and the schema calls them timestamps. Every text column is stored as bytes with no logical type on it. ClickBench's own loader does all three on the way in, so the published numbers are numbers for queries that ran against the converted types, and an engine here that skipped any of it would not be running the benchmark.
+
+Reading the file as it stands was measured rather than assumed. Without the string conversion six of the 43 fail to bind at all and another nine answer with bytes where they should answer with text. The second group is the dangerous one. The row counts are right, the values are right, and the digest this harness compares engines on hashes bytes and text through the same function, so the agreement check would have passed. Without the date and timestamp conversions eight fail and two more answer with integers where they should answer with dates. That is why there is a test asserting the column types directly rather than a test asserting the queries ran.
+
+Both io modes end with a `hits` whose columns have the same types and get there differently. Scan mode puts the conversions in a view's projection, where DuckDB pushes the filter and the column list into the Parquet reader. Memory mode converts in Arrow before registering the table, rather than wrapping the registered table in the same view, because a view would cast a hundred million binary values to text inside every one of the 43 timed queries and land that in the number as if it were query execution.
+
+Two things had to change outside the engine. `engines.query_map` used to fall through to the db-benchmark callables for any suite it did not recognize, so a suite whose wiring was forgotten would have reported an engine that ran ten completely different queries under ClickBench's names; it now refuses. And `table_paths` has a ClickBench branch, because this is the only dataset here that is more than one file per table and its manifest has a row per partition rather than a row under the table name the queries read.
+
+### The cross engine digest can take a full width integer
+
+`column_sums` cast every numeric column to float64 with Arrow's safe cast, which refuses an integer past 2^53. The first three suites never hit it because their integers are small. ClickBench answers with `WatchID`, `UserID`, `URLHash` and `RefererHash`, which are sixty four bit hashes, and the refusal turned q18 and q23 into reported engine failures rather than into measurements. The cast is unsafe now, which sounds worse than it is: the value goes into a sum that is rounded to nine significant figures before anything compares it, so the precision the cast gives up was never being looked at.
+
 ### The 43 ClickBench queries are in the registry, under ClickBench's names
 
 `tools/queries.py` has a `CLICKBENCH` tuple now, and `pixi run bench --suite clickbench --queries all` resolves 43 queries. Nothing runs them yet. The registry is what has to exist before any port does, because it is the thing that lets us say four engines ran the same query.
