@@ -10,14 +10,14 @@ on:
       suite:
         description: Suite to run
         type: choice
-        options: [db-benchmark, tpch, clickbench, all]
+        options: [db-benchmark, tpch, ingestion, clickbench, all]
         default: all
       size:
-        description: Dataset size, or empty for the suite's default (0.5GB, sf1, 10M for clickbench here)
+        description: Dataset size, or empty for the suite's default (0.5GB, sf1, 10M for ingestion, 10M for clickbench here)
         type: string
         default: ""
       io:
-        description: memory hands every engine the same Arrow table; scan lets each read the Parquet itself
+        description: memory hands every engine the same Arrow table; scan lets each read the Parquet itself. Ignored for ingestion, which is scan only
         type: choice
         options: [memory, scan]
         default: memory
@@ -67,10 +67,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The three suites that are wired up. `suites/udf` has a README and no
+        # The four suites that are wired up. `suites/udf` has a README and no
         # queries, and putting it in the matrix would mean a job a week whose entire
-        # output is "unknown suite".
-        suite: ${{ (inputs.suite == 'all' || inputs.suite == '') && fromJSON('["db-benchmark","tpch","clickbench"]') || fromJSON(format('["{0}"]', inputs.suite)) }}
+        # output is "unknown suite". Ingestion was left out for that same reason and
+        # then stayed out after it got its queries, which is why the front page has
+        # been describing a fourteen file run that produced twelve. See #69.
+        suite: ${{ (inputs.suite == 'all' || inputs.suite == '') && fromJSON('["db-benchmark","tpch","ingestion","clickbench"]') || fromJSON(format('["{0}"]', inputs.suite)) }}
         # The README says a full run is on two machines, an AMD EPYC VPS and an
         # i9-13900K desktop, and nothing is averaged across them. Which runners
         # those are is a repository variable rather than a line here, the same
@@ -110,6 +112,35 @@ jobs:
         run: |
           if [ -z "$SIZE" ]; then echo "SIZE=10M" >> "$GITHUB_ENV"; fi
           if [ -z "$TIMEOUT" ]; then echo "TIMEOUT=900" >> "$GITHUB_ENV"; fi
+
+      # Ingestion is the one suite with no memory mode, and the harness refuses
+      # rather than accepting one, because handing every engine the same Arrow
+      # table on a suite that exists to time the CSV reader would mean reading the
+      # file before timing the read. The refusal is right for somebody at a
+      # terminal and wrong here: `--io memory` is what the dispatch form defaults
+      # to and what the other three suites in an `all` run want, so a scheduled
+      # run would fail one job out of four every week to say something the suite
+      # already knows. This overrides the input for this job only and writes down
+      # that it did, so a result file that says scan against a dispatch that said
+      # memory has an explanation in the log above it.
+      #
+      # The size is here rather than in the matrix for the same reason ClickBench's
+      # is: `pixi run bench` defaults ingestion to 10M already, and repeating that
+      # in the matrix would freeze the two together, so a change to the harness
+      # default would silently stop applying here. At 10M the four files are about
+      # 1.5 GB of CSV on a runner with fourteen gigabytes of disk, generated in
+      # roughly two and a half minutes, and the run itself is well inside the job
+      # timeout: at 1M with three engines and three runs it takes 47 seconds, and
+      # the scaling to 10M with four engines and ten runs is a factor of about
+      # forty. See #69 for the measurement.
+      - name: What ingestion runs at here
+        if: matrix.suite == 'ingestion'
+        run: |
+          if [ -z "$SIZE" ]; then echo "SIZE=10M" >> "$GITHUB_ENV"; fi
+          if [ "$IO" != "scan" ]; then
+            echo "::notice::ingestion has no memory mode, running it in scan mode instead of $IO"
+            echo "IO=scan" >> "$GITHUB_ENV"
+          fi
 
       # The hits table is downloaded rather than generated, one partition at a time
       # from ClickHouse's bucket, and a hundred files a week from somebody else's
