@@ -12,11 +12,13 @@ measured, and it measures it on purpose.
 
 from __future__ import annotations
 
+import clickbench
 import polars as pl
 import pyarrow as pa
+import pyarrow.parquet as pq
 import queries
 
-from . import polars_tpch
+from . import polars_clickbench, polars_tpch
 
 NAME = "polars"
 
@@ -50,9 +52,44 @@ def load(paths: dict[str, str], suite: str = "db-benchmark", io: str = "memory")
     """
     if suite == "ingestion":
         return dict(paths)
+    if suite == "clickbench":
+        return {"hits": load_clickbench(paths["hits"], io)}
     if io == "scan":
         return {name: pl.scan_parquet(path) for name, path in paths.items()}
     return {name: pl.read_parquet(path) for name, path in paths.items()}
+
+
+def load_clickbench(pattern: str, io: str) -> pl.LazyFrame:
+    """Reads the hits table under the types the published schema gives it.
+
+    The path is a glob, because this is the only dataset here that is more than
+    one file per table, and `clickbench.partitions` expands it in partition number
+    order rather than lexical order so that every engine reads the same rows.
+
+    In memory mode the conversion happens in Arrow, through the same
+    `clickbench.retype` the DuckDB memory path calls, so neither engine is reading
+    its own interpretation of the file. In scan mode there is nothing to convert
+    yet, so the same three conversions go into the plan as a projection and Polars
+    pushes the column list underneath them into the Parquet reader.
+
+    Args:
+        pattern: The partition glob.
+        io: How the table should reach the engine.
+
+    Returns:
+        The table as a lazy frame.
+    """
+    files = clickbench.partitions(pattern)
+    if io == "scan":
+        return pl.scan_parquet(files).with_columns(
+            pl.col(pl.Binary).cast(pl.String),
+            pl.col(clickbench.DATE_COLUMN).cast(pl.Int32).cast(pl.Date),
+            *[
+                pl.from_epoch(pl.col(name), time_unit="s").cast(pl.Datetime("us")).alias(name)
+                for name in clickbench.TIMESTAMP_COLUMNS
+            ],
+        )
+    return pl.from_arrow(clickbench.retype(pq.read_table(files))).lazy()
 
 
 def finish(frame: pl.DataFrame) -> pa.Table:
@@ -398,6 +435,34 @@ def _tpch(name: str):
 
 
 TPCH_QUERIES = {name: _tpch(name) for name in polars_tpch.QUERIES}
+
+
+def _clickbench(name: str):
+    """Wraps one ClickBench query so it returns an Arrow table like everything else.
+
+    Args:
+        name: The query name.
+
+    Returns:
+        A callable taking the loaded tables.
+    """
+
+    def run(ctx: dict) -> pa.Table:
+        """Runs the query.
+
+        Args:
+            ctx: The loaded tables.
+
+        Returns:
+            The answer.
+        """
+        return finish(polars_clickbench.QUERIES[name](_lazy(ctx)))
+
+    run.__name__ = f"clickbench_{name}"
+    return run
+
+
+CLICKBENCH_QUERIES = {name: _clickbench(name) for name in polars_clickbench.QUERIES}
 
 
 # The neutral names in `queries.NARROW_SCHEMA`, in Polars.

@@ -4,6 +4,34 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### Polars answers all 43 ClickBench queries
+
+`pixi run bench --suite clickbench --engines duckdb,pandas,polars --queries all` runs. `tools/engines/polars_clickbench.py` is 43 `LazyFrame` chains, one per published statement, each ending in `collect`, which is the shape a Polars user writes and also the thing that stops the harness from timing plan construction. A lazy engine that is never asked for an answer has not done any work, and a port that returned the plan would have produced beautiful numbers that meant nothing.
+
+Both io modes work and they are genuinely different paths. Scan mode is `pl.scan_parquet` with the day, second and bytes to text conversions written into the projection, so Polars pushes the column list into the Parquet reader and most of these queries touch three columns out of a hundred and five. Memory mode goes through the same `clickbench.retype` that DuckDB and pandas use and hands Polars a table that is already in Arrow, where there is nothing left to push. The difference between those two numbers on the same query is the clearest measurement in this repository of what projection pushdown over a wide table is worth.
+
+Against the real 1M partition, 33 of the 43 agree with DuckDB exactly. The 10 that differ are all inside the 13 the SQL does not determine an answer for, so nothing in this port disagrees with DuckDB on a query that has an answer. Scan and memory agree with each other everywhere except q17, q22, q38 and q39, with identical shapes on all four, which is the same tie variance and not a conversion difference.
+
+### Polars is not deterministic on the queries the SQL does not determine
+
+Worth writing down because it is a fact about the engine rather than about this port, and issue #47 needs it. The 43 digests were taken twice inside one process and again in a fresh one. Exactly the 10 queries above came back different, and q24, q25 and q26 came back the same every time.
+
+That split is the whole story of `maintain_order=True`. Those three sort raw rows in scan order with nothing upstream that reorders, so a stable sort makes them repeatable. The other 10 sort the output of a `group_by`, which Polars leaves unordered, and a stable sort over an unstable input is still unstable. Forcing order on the grouping would fix it and would cost far more than the determinism is worth on queries that have no one right answer at any setting. So the pandas port is repeatable on all 13 and the Polars port is repeatable on 3 of them, and a run to run comparison of Polars against itself on those 10 will show a difference that is not a regression.
+
+### Three places where the fast way answers a different question
+
+`n_unique`, not `approx_n_unique`, in the eight queries that count something distinct. The approximate one is faster and it is a different question. ClickHouse's own published entry uses `uniq`, which is approximate, and that is one reason its numbers on those rows do not sit next to a DuckDB number on the same query. `n_unique` also counts a null as a value where `COUNT(DISTINCT x)` does not, which does not bite here because the hits table has no nulls in the columns those eight touch, and would on a table that did.
+
+`str.len_bytes`, not `str.len_chars`, for `STRLEN` in q27 and q28. Same trap the pandas port has and the same two percent, and both queries sit behind a `HAVING COUNT(*) > 100000` that no CI sized fixture can reach through the query, so there is a test that runs DuckDB's `STRLEN` beside the port's byte count and a second one asserting the two counts differ on this fixture.
+
+q29 is ninety expressions inside one `select` because the statement asks for ninety sums, and q34 groups by a constant because `GROUP BY 1, URL` groups by a constant. Some planners drop that and some do not. Dropping it by hand would be doing the optimizer's job and then reporting the result as the optimizer's work.
+
+One more difference that is not a choice: Polars uses the regex crate, so the capture group in q28 is `$1` where DuckDB writes `\1`. A test runs both against the fixture and requires the same host back out, including on a referer that does not match the pattern at all, which both engines have to leave alone rather than turn into an empty string.
+
+### The fixture moved out of the pandas tests
+
+`tests/clickbench_fixture.py` now holds the eight row table and the patterns for taking a published statement's last clause back off, and both port test files import it. Copying it would have been less work and the copies would have drifted the first time one of them was edited to catch something, which defeats the point: the value of this fixture is that every engine is compared on exactly the same rows.
+
 ### pandas answers all 43 ClickBench queries
 
 `pixi run bench --suite clickbench --engines duckdb,pandas --queries all` runs, and `tools/engines/pandas_clickbench.py` is 43 functions, one per published statement, each taking the loaded tables and handing back a frame. The loader is the same one DuckDB's memory path uses, which matters more than it sounds: the day conversion, the second conversion and the bytes to text conversion are one function called from both engines rather than two implementations that are supposed to agree.
