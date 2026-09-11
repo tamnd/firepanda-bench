@@ -4,6 +4,12 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### ClickBench is documented like a suite somebody has to run, and the front page admits it exists
+
+The suite had a README covering the five ways a port of it goes quietly wrong and the five ways our methodology differs from the published table, which is the hard part, and it never said the easy part. It did not say what the suite is for next to the three that were already here, where the data comes from, which engines run it, what the two io modes cost on a table with 105 columns, or which queries are worth looking at first. Those five sections are there now, along with a license note, because a reader arriving at a suite wants to know what it measures before they want to know how a port of it goes wrong.
+
+The repository README had not been told ClickBench landed. Two real public suites and one of our own is now three and one, the badge lists it, the suite table has a fourth row, and a full run is fourteen result files rather than ten. The sentence that said firepanda runs 15 of 15 db-benchmark queries, 0 of 22 TPC-H queries and 5 of 5 ingestion queries is gone, replaced by the reasons for the gaps and a pointer at the generated coverage column, because a count in prose is a count somebody has to remember to edit and this one had been wrong since ClickBench merged. The license section names ClickBench as Apache-2.0 from ClickHouse, the hits dataset as ClickHouse's own under its own terms and downloaded rather than redistributed, and these runs as ours rather than an entry in the published table.
+
 ### The READMEs carry the numbers, written by a script rather than typed
 
 Ten result files a week went into a workflow artifact, a step summary and a static page, and not one of those is what somebody looks at when they arrive. They open the repository and they read a README, and what the suite READMEs said was what the suite is and how the port was done, which is the right thing to say and is not a number.
