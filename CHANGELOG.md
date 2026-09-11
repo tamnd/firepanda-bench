@@ -2,7 +2,9 @@
 
 Versions here track the harness, not the engines it measures and not firepanda itself. A change that alters what a published number means gets a minor bump, because a reader comparing two result files needs to know whether the measurement changed under them.
 
-## Unreleased
+## v0.3.3
+
+A patch, because nothing here changes what a published number means. No result file a reader has ever seen reads differently after this. What changed is what the repository can say about whether the ClickBench numbers are right, which was previously only that the ports agree with each other.
 
 ### Five ways a ClickBench port is quietly wrong
 
