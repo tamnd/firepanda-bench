@@ -4,6 +4,10 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+## v0.3.4
+
+A patch. Nothing here changes what a published number means and no result file a reader has ever seen reads differently after it. What changed is whether a reader can read the ClickBench report at all, and whether the suite runs without somebody starting it by hand.
+
 ### The ClickBench report is six blocks rather than one table of 43 rows
 
 Every other suite gets its grouping for free from the query registry, and ClickBench is one flat list of 43 with no groups in it. So the 43 now sit in six bands, each a contiguous range of ClickBench's own numbering, cut where the workload changes: seven scans, twelve group bys, eight where the work is in the filter or the sort, three over computed values, six with a wide or composite key, and seven page view queries inside a date window. Each band is a heading, a sentence saying what is in it, and a table of between three and twelve rows.
