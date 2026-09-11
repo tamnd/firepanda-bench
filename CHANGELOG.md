@@ -2,7 +2,11 @@
 
 Versions here track the harness, not the engines it measures and not firepanda itself. A change that alters what a published number means gets a minor bump, because a reader comparing two result files needs to know whether the measurement changed under them.
 
-## Unreleased
+## v0.3.2
+
+Still a patch, and the rule at the top of the file is still why. Two more engines answer the 43 queries, which is most of the work in the suite, and nothing here publishes a number. No result file a reader has ever seen means anything different after this. The minor comes when all four engines have a cell and the report has a place to put them.
+
+What is worth knowing before then is that both ports were checked against DuckDB on real data rather than only against a fixture, and neither disagrees with DuckDB on a query whose answer the SQL determines. The disagreements are 11 queries for pandas and 10 for Polars, all of them inside the 13 written up in issue #47, which is the set the published statements do not pin an answer for.
 
 ### Polars answers all 43 ClickBench queries
 
