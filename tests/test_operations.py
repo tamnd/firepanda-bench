@@ -94,16 +94,39 @@ def test_the_reductions_that_keep_their_values_per_group_have_rows_now():
     assert gaps == []
 
 
-def test_the_only_operation_with_no_row_is_the_one_excluded_on_purpose():
-    # Everything else the 37 queries touch is measured. When that stops being true
-    # the new name belongs either in the matrix or in a paragraph saying why not.
-    assert operations.coverage()["missing"] == ["pandas.read_csv"]
+def test_every_operation_with_no_row_is_either_a_known_hole_or_excluded_on_purpose():
+    # This used to say the only uncovered name was pandas.read_csv. ClickBench added
+    # six real ones, and the point of pinning the list is unchanged: a name arriving
+    # here belongs either in the matrix, in the exclusion table with a reason, or in
+    # this list with somebody having looked at it.
+    assert operations.coverage()["missing"] == [
+        "DataFrame.__len__",
+        "DataFrame.iloc",
+        "Series.min",
+        "Series.nunique",
+        "Series.where",
+        "dt.minute",
+        "pandas.read_csv",
+        "str.extract",
+    ]
 
 
-def test_the_deliberate_exclusion_is_not_described_as_a_hole():
+def test_the_holes_and_the_deliberate_exclusions_are_not_described_the_same_way():
+    # A name the matrix has not reached yet and a name it will never carry are
+    # different statements, and running them together makes the second look like an
+    # excuse for the first.
     text = operations.report()
-    assert "deliberate exclusion rather than a hole" in text
-    assert "should grow next" not in text
+    assert "pandas.read_csv is a deliberate exclusion rather than a hole." in text
+    assert "DataFrame.__len__ is a deliberate exclusion rather than a hole." in text
+    assert "should grow next" in text
+    for name in ("Series.nunique", "dt.minute", "str.extract"):
+        assert name in text.split("is a deliberate exclusion")[0]
+
+
+def test_a_deliberate_exclusion_carries_the_reason_it_is_one():
+    for name, reason in operations.EXCLUDED_ON_PURPOSE.items():
+        assert name in operations.coverage()["missing"], f"{name} is excluded and is not missing"
+        assert len(reason) > 80, f"{name} is excluded without a reason worth reading"
 
 
 def test_the_coverage_split_accounts_for_every_declared_operation():
