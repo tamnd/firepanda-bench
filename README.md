@@ -101,6 +101,8 @@ pixi run data --suite db-benchmark --size 0.5GB
 pixi run bench --suite db-benchmark --size 0.5GB --io memory --runs 5
 ```
 
+`pixi.lock` is committed, and `pixi install` above reads it rather than solving. That is what makes a version in a result file mean something: the environment a number was taken in is a file in this repository at that commit, and an upgrade to pandas or DuckDB is a diff somebody reviewed rather than whatever the runner solved that morning. CI installs with `--locked`, so a manifest change without a lock update fails there. `pixi lock` regenerates it and the regenerated file goes in the same commit as the change to `pixi.toml`.
+
 `pixi run repro <results-file>` re-runs exactly the configuration that produced a given result file and reports any median that moved by more than a quarter. Anyone should be able to check any number we publish.
 
 `pixi run check-sweep <results-file>` is the paranoia pass. It flags a speedup large enough to be a measurement error rather than a result, a run that covers too little of the suite to be quoted, a clean sweep, and any engine that raised. The first three go to a human, because each of them might be true. The last one fails CI as `check-sweep --crashes-only`, because an engine that raised is a hole in the table and in a report it reads exactly like a query the engine has not implemented.

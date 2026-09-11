@@ -2,6 +2,16 @@
 
 Versions here track the harness, not the engines it measures and not firepanda itself. A change that alters what a published number means gets a minor bump, because a reader comparing two result files needs to know whether the measurement changed under them.
 
+## Unreleased
+
+### CI installs a locked environment, which it has never been able to do
+
+`.github/actions/setup-pixi` ends with `pixi install --locked`, which refuses to solve and needs the lock file to be there. `pixi.lock` was not committed and was not ignored either, so it sat untracked in every working copy looking deliberate. Every job that used that action failed at the setup step, which is all three jobs in the bench workflow and the whole verify workflow.
+
+That means the release check has never run. v0.3.1, v0.3.2 and v0.3.3 each triggered the verify workflow and each failed before generating any data, so the row by row answer comparison, and since v0.3.3 the check against the hand written ClickBench answers, had never executed on a runner.
+
+The lock is committed now. It covers the three platforms in the manifest, `pixi lock --check` says it was already up to date with `pixi.toml`, and nothing about the environment changes. What changes is that a job can install it, and that an upgrade to pandas or DuckDB arrives as a diff somebody reviewed rather than as whatever the runner solved that morning.
+
 ## v0.3.3
 
 A patch, because nothing here changes what a published number means. No result file a reader has ever seen reads differently after this. What changed is what the repository can say about whether the ClickBench numbers are right, which was previously only that the ports agree with each other.
