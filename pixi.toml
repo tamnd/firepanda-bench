@@ -97,3 +97,9 @@ check-sweep = "python tools/check_sweep.py"
 # It used to need altair and jinja2 in an environment of their own, which meant a
 # second solve of the whole dependency set to draw a line chart.
 site = "python tools/site.py"
+
+# Writes the current numbers into the suite READMEs and the front page, between
+# markers, because the file somebody reads when they arrive is a README and not a
+# workflow artifact. `--check` fails when a block was edited by hand or has gone
+# stale against the result files present, and CI runs that.
+suite-readme = "python tools/suite_readme.py"

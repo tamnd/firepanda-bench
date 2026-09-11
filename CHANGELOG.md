@@ -4,6 +4,24 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### The READMEs carry the numbers, written by a script rather than typed
+
+Ten result files a week went into a workflow artifact, a step summary and a static page, and not one of those is what somebody looks at when they arrive. They open the repository and they read a README, and what the suite READMEs said was what the suite is and how the port was done, which is the right thing to say and is not a number.
+
+Each suite README now has a block between two markers with one table per machine, size and io mode. Per engine it gives coverage, the median, the ninety ninth percentile over that median, throughput in input rows per second, peak resident set and CPU seconds with the cores those imply, each with its ratio against pandas in the direction the rest of the repository uses, where above one is better. The front page has one row per suite from the largest run of it. `pixi run suite-readme` writes all of it.
+
+Throughput is input rows rather than answer rows, because a query returning ten rows out of a hundred million did not do ten rows of work, and it is taken from the tables the query actually reads rather than from the suite row count, because the ingestion suite's wide file is a tenth of the height of its narrow one. Every number in a table is a geometric mean over the same set of queries, the ones every engine that answered agreed on, and every ratio is taken per query and then averaged rather than by dividing two columns, so an engine cannot improve one by refusing the query it is slowest on. The coverage column is where a refusal shows.
+
+Nothing is aggregated across a machine, a size or an io mode, and each table says which of the four it is from, because a mean over two of them is a number about neither.
+
+### The scheduled run opens a pull request with the numbers rather than pushing them
+
+`results/*.json` is gitignored and the publish job commits nothing back, which is a rule worth keeping: a workflow with a push credential is a different security question than one without, and a number that lands in a commit nobody reviewed is a number nobody checked.
+
+So the weekly run regenerates the blocks from the run it just did and opens a pull request with the two paths it touched. Between runs the README is the last state a human looked at and says which run it came from, which is more honest than a number that could have changed under the reader an hour ago. The step that has the credential is written out in the workflow rather than delegated to a third party action, because it is the only job in this repository that can write to it.
+
+`pixi run suite-readme --check` fails when a block has been edited by hand, which it can tell from the digest in the closing marker with no result files in the checkout at all, and CI runs that. A suite with no result file keeps whatever its block already said rather than being emptied, so running the script on a fresh checkout does not throw away the last reviewed numbers.
+
 ### The ClickBench operation declarations are read off the port rather than off the SQL
 
 Every query in this repository declares what it is made of in pandas names, so a reader who sees a query lose can look the operation up in the firepanda-compat cost matrix rather than guessing which part of it was slow. The ClickBench declarations were written before the pandas port existed, off the published SQL, with a comment saying they would be re-derived from the port once there was one. There is one now.
