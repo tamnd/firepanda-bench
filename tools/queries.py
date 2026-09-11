@@ -80,7 +80,8 @@ class Query:
     """The identifier used in result files and tables."""
 
     group: str
-    """Which suite group it belongs to: groupby, join, tpch or csv."""
+    """Which suite group it belongs to: groupby, join, tpch, csv, or one of the six
+    ClickBench bands."""
 
     description: str
     """What it computes, in words."""
@@ -99,7 +100,7 @@ class Query:
 
     undetermined: str = ""
     """Why the statement does not determine which rows come back, or empty when it
-    does. Set for thirteen ClickBench queries and for nothing else."""
+    does. Set for twelve ClickBench queries and for nothing else."""
 
 
 GROUPBY = (
@@ -565,6 +566,11 @@ NARROW_SCHEMA = (
 # types. An engine that answered with five rows, or with the wrong columns, is
 # still caught. That is weaker than the check the other thirty one get and a great
 # deal stronger than skipping them.
+# Which size the table below was computed at. Carried next to it rather than kept
+# in a comment, because the report has to say so when it is describing a run at a
+# different size and a comment cannot be printed.
+CLICKBENCH_UNDETERMINED_SIZE = "1M"
+
 CLICKBENCH_UNDETERMINED = {
     "q11": "3 groups tie at the row the limit cuts on",
     "q17": "no ORDER BY at all, so any ten groups are a correct answer",
@@ -581,6 +587,81 @@ CLICKBENCH_UNDETERMINED = {
 }
 
 
+# The 43 in six bands, and what each band is.
+#
+# This is not a taxonomy of what the queries do. They do not partition that way:
+# almost every one of them filters, groups and sorts at once, so any honest
+# taxonomy either puts most of the suite in one bucket or puts a query in three.
+# These are contiguous ranges of the published numbering, cut where the workload
+# changes, and their whole job is to make the report readable. One table of 43
+# rows is a table nobody reads, and six of between three and twelve rows, each
+# with a sentence saying what is in it, is the same numbers where a reader can
+# find them. A query is in exactly one band because a range cannot overlap, and
+# the bands cover all 43 because the ranges are contiguous, both of which are
+# checked by a test rather than eyeballed.
+#
+# The second use is `--queries scan`, which runs one band. Rerunning seven
+# queries to look at a change in a Parquet reader beats rerunning 43.
+CLICKBENCH_BANDS = {
+    "scan": (
+        ("q0", "q1", "q2", "q3", "q4", "q5", "q6"),
+        "Reductions over the whole table with no grouping in them. What they "
+        "measure is how much of the file an engine had to touch to answer, which "
+        "is why the first two are a row count and a row count with one predicate.",
+    ),
+    "groupby": (
+        ("q7", "q8", "q9", "q10", "q11", "q12", "q13", "q14", "q15", "q16", "q17", "q18"),
+        "Group by one or two stored columns, sort by the aggregate, take ten. "
+        "The largest band and the most repetitive on purpose: the key is the "
+        "variable and everything around it is held still, so the differences "
+        "between these rows are differences between key types and cardinalities.",
+    ),
+    "filter": (
+        ("q19", "q20", "q21", "q22", "q23", "q24", "q25", "q26"),
+        "The work is in the filter or in the sort rather than in the grouping. A "
+        "point lookup, three substring filters, the one query that returns every "
+        "column of the table, and three that sort the phrase column and take ten.",
+    ),
+    "derived": (
+        ("q27", "q28", "q29"),
+        "Aggregates over values the query computes rather than values the file "
+        "stores: the length of a string, the host extracted out of a referer, and "
+        "ninety sums over one column in a single pass.",
+    ),
+    "keys": (
+        ("q30", "q31", "q32", "q33", "q34", "q35"),
+        "Group by a wide or composite key, which is where the grouping itself "
+        "becomes the cost. WatchID is nearly unique, so q31 and q32 build about "
+        "as many groups as there are rows.",
+    ),
+    "window": (
+        ("q36", "q37", "q38", "q39", "q40", "q41", "q42"),
+        "Page views per key inside one date window, five of them taking their ten "
+        "rows at an offset. An offset is the one thing in the suite that makes an "
+        "engine materialize rows it then throws away.",
+    ),
+}
+
+
+def _band(name: str) -> str:
+    """Returns which band a ClickBench query is in.
+
+    Args:
+        name: The query name.
+
+    Returns:
+        The band name.
+
+    Raises:
+        KeyError: If no band claims the query, which means a query was added
+            without being put in one.
+    """
+    for band, (names, _) in CLICKBENCH_BANDS.items():
+        if name in names:
+            return band
+    raise KeyError(f"{name} is in no ClickBench band")
+
+
 def _cb(name: str, description: str, why: str, keys: tuple[str, ...] = ()) -> Query:
     """Builds one ClickBench entry.
 
@@ -595,7 +676,7 @@ def _cb(name: str, description: str, why: str, keys: tuple[str, ...] = ()) -> Qu
     """
     return Query(
         name,
-        "clickbench",
+        _band(name),
         description,
         why,
         keys,
@@ -1010,17 +1091,11 @@ SUITES = {
 }
 
 # The groups a `--queries` argument may name, per suite.
-#
-# ClickBench gets one group with the suite's own name rather than four categories,
-# because the queries do not partition. Almost every one of them filters, groups
-# and sorts at the same time, so any taxonomy would either put most of the suite in
-# one bucket or need a query to be in three of them. A reader who wants a subset
-# names the queries.
 GROUPS = {
     "db-benchmark": ("groupby", "join"),
     "tpch": ("tpch",),
     "ingestion": ("csv",),
-    "clickbench": ("clickbench",),
+    "clickbench": tuple(CLICKBENCH_BANDS),
 }
 
 

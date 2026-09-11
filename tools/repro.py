@@ -11,6 +11,11 @@ is a confirmation; one that does not is either a different machine, a different
 version, or a number that should not have been published, and the output says
 which of those it can rule out.
 
+The answers are compared as well as the timings, on the digest for every query
+whose statement determines which rows come back and on the row count for the
+twelve ClickBench queries whose statement does not. A reproduction of one of those
+that returns a different ten rows out of a tie has reproduced.
+
 Usage:
     python tools/repro.py results/2026-08-28-tpch-sf1-memory.json
 """
@@ -26,6 +31,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import metrics
+import queries as query_registry
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -33,6 +39,16 @@ ROOT = Path(__file__).resolve().parent.parent
 # percent is loose, and it is loose on purpose: a shared machine, a different
 # kernel and a warmer page cache all move a query by more than the run to run
 # spread does, and a check that fires on all of those is a check nobody reads.
+#
+# It is a percentage and nothing else, which means on a suite whose medians are
+# milliseconds it is a measurement of how quiet the machine is. ClickBench at 1M
+# is that suite: most of its 129 pairings are under ten milliseconds and a laptop
+# compiling something in another window moves them by three times, in whichever
+# direction the load happened to fall. That is not a reason to add a floor, since
+# raising one to a millisecond here changed 79 flagged pairings to 74, so the
+# drift is the load rather than the timer. It is a reason to reproduce a file on
+# the machine that produced it and while that machine is doing nothing else, and
+# the sizes the scheduled job publishes have medians in seconds.
 DRIFT = 0.25
 
 
@@ -99,9 +115,30 @@ def compare(original: dict, fresh: dict) -> int:
             drifted += 1
         print(f"| {key} | {before:.4f} s | {after:.4f} s | {change:+.1%}{flag} |")
 
+    suite = original["suite"]
     for key, was in sorted(original["results"].items()):
         now = fresh["results"].get(key)
-        if was.get("ok") and now and now.get("ok") and was.get("checksum") != now.get("checksum"):
+        if not (was.get("ok") and now and now.get("ok")):
+            continue
+        # Twelve of the ClickBench statements do not determine which rows come
+        # back, and an engine is free to return a different ten of a tie on a
+        # second run, which several of them do because the order a parallel
+        # aggregation finishes in is not fixed. Comparing the digest there would
+        # report a dozen changed answers on a reproduction that reproduced. The row
+        # count is what the statement does determine, so that is what is checked,
+        # and a query that came back with nine rows is still caught.
+        reason = query_registry.undetermined(suite, key.split("/")[0])
+        if reason:
+            if was.get("rows_out") != now.get("rows_out"):
+                print(
+                    f"\n{key} returned {now.get('rows_out')} rows and the file has "
+                    f"{was.get('rows_out')}. The rows this query returns are not "
+                    f"determined, since {reason}, so the digest is not compared. "
+                    f"How many of them come back is."
+                )
+                drifted += 1
+            continue
+        if was.get("checksum") != now.get("checksum"):
             print(f"\nthe answer changed for {key}, which is not a timing difference")
             drifted += 1
     return drifted

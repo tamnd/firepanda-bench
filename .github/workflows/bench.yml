@@ -10,10 +10,10 @@ on:
       suite:
         description: Suite to run
         type: choice
-        options: [db-benchmark, tpch, all]
+        options: [db-benchmark, tpch, clickbench, all]
         default: all
       size:
-        description: Dataset size, or empty for the suite's default (0.5GB, sf1)
+        description: Dataset size, or empty for the suite's default (0.5GB, sf1, 10M for clickbench here)
         type: string
         default: ""
       io:
@@ -29,6 +29,10 @@ on:
         description: How many runs the median is taken over
         type: string
         default: "10"
+      timeout:
+        description: Seconds one engine gets for one query, or empty for the suite's default
+        type: string
+        default: ""
       ref:
         description: firepanda ref to benchmark
         type: string
@@ -53,19 +57,28 @@ env:
   RUNS: ${{ inputs.runs || '10' }}
   SIZE: ${{ inputs.size || '' }}
   ENGINES: ${{ inputs.engines || 'all' }}
+  TIMEOUT: ${{ inputs.timeout || '' }}
 
 jobs:
   run:
-    name: ${{ matrix.suite }}
-    runs-on: ubuntu-latest
+    name: ${{ matrix.suite }} on ${{ matrix.machine }}
+    runs-on: ${{ matrix.machine }}
     timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
-        # Only the two suites that are wired up. `suites/ingestion` and `suites/udf`
-        # have READMEs and no queries, and putting them in the matrix would mean two
-        # jobs a week whose entire output is "unknown suite".
-        suite: ${{ (inputs.suite == 'all' || inputs.suite == '') && fromJSON('["db-benchmark","tpch"]') || fromJSON(format('["{0}"]', inputs.suite)) }}
+        # The three suites that are wired up. `suites/udf` has a README and no
+        # queries, and putting it in the matrix would mean a job a week whose entire
+        # output is "unknown suite".
+        suite: ${{ (inputs.suite == 'all' || inputs.suite == '') && fromJSON('["db-benchmark","tpch","clickbench"]') || fromJSON(format('["{0}"]', inputs.suite)) }}
+        # The README says a full run is on two machines, an AMD EPYC VPS and an
+        # i9-13900K desktop, and nothing is averaged across them. Which runners
+        # those are is a repository variable rather than a line here, the same
+        # arrangement the GPU job uses, so registering the second machine is a
+        # settings change and not a pull request. With the variable unset this is
+        # one hosted runner, which is what it has always been, and the machine is
+        # recorded in the result file either way.
+        machine: ${{ fromJSON(vars.BENCH_RUNNERS || '["ubuntu-latest"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -78,6 +91,40 @@ jobs:
       # against an unnamed version of anything is not a comparison.
       - name: Record environment
         run: pixi run env-report --out results/env.json
+
+      # ClickBench is the one suite whose own default size is not the size to run
+      # here. `pixi run bench` defaults it to 1M, which exists so that a laptop and
+      # the verify workflow have something that finishes, and this job can afford
+      # ten times that. It cannot afford 100M, which is the only size comparable
+      # with a published ClickBench number and is a twelve gigabyte download onto a
+      # runner with fourteen gigabytes of disk. The report labels 10M as partial
+      # wherever it appears.
+      #
+      # The timeout is per engine per query rather than for the job. An hour, which
+      # is the harness default, is sized for a fifty gigabyte join and here it means
+      # one hung pairing holds the runner for an hour and the other 128 never run.
+      # Fifteen minutes is well clear of the slowest thing measured, which is pandas
+      # on the two string length queries.
+      - name: What ClickBench runs at here
+        if: matrix.suite == 'clickbench'
+        run: |
+          if [ -z "$SIZE" ]; then echo "SIZE=10M" >> "$GITHUB_ENV"; fi
+          if [ -z "$TIMEOUT" ]; then echo "TIMEOUT=900" >> "$GITHUB_ENV"; fi
+
+      # The hits table is downloaded rather than generated, one partition at a time
+      # from ClickHouse's bucket, and a hundred files a week from somebody else's
+      # server for a file that has not changed since 2022 is rude as well as slow.
+      # The key carries the size because the partitions per size differ, and a
+      # restored cache is not trusted on the strength of the key: the data step
+      # rehashes every file against the manifest and fetches whatever does not
+      # match, so a partial or corrupted cache costs a download and not a wrong
+      # number.
+      - name: Restore the ClickBench partitions
+        if: matrix.suite == 'clickbench'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: data/clickbench/${{ env.SIZE }}
+          key: clickbench-${{ env.SIZE }}-${{ hashFiles('tools/clickbench.py') }}
 
       - name: Fetch or generate datasets
         env:
@@ -103,6 +150,7 @@ jobs:
             --io "$IO" \
             --engines "$ENGINES" \
             --runs "$RUNS" \
+            ${TIMEOUT:+--timeout "$TIMEOUT"} \
             --env results/env.json
 
       - name: Check the result files carry everything the report needs
@@ -130,7 +178,7 @@ jobs:
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: results-${{ matrix.suite }}-${{ github.run_id }}
+          name: results-${{ matrix.suite }}-${{ matrix.machine }}-${{ github.run_id }}
           path: results/*.json
           retention-days: 90
 

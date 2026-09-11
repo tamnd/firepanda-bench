@@ -58,6 +58,8 @@ This cannot be fixed by making the ports agree, because agreeing would mean addi
 
 The set is a function of the size, since which rows tie at row ten depends on how many rows there are. The list in `tools/queries.py` is 1M. Running the validator at 10M or 100M is how the list for those sizes gets written, and it prints the numbers rather than only saying the list is wrong.
 
+The scheduled benchmark runs this suite at 10M, where that list is carried over rather than checked, and the report says so under the table instead of leaving a 1M number sitting next to a 10M one. A query that ties at 10M and not at 1M does not go quietly: its values are compared, the engines return different rows, and it comes out as a disagreement in the report, which is the loudest place in the file.
+
 What is still checked in all twelve is the row count, the column names and the column types, all of which the statements do determine. An engine that answered one of them with five rows, or lost a column, or answered with an integer where everybody else has a date, is still caught. For the four of them that are in [`expected/`](expected/) there is more: the values of the ordering key are determined even when which rows carry them is not, and every row an engine returned has to be a row of the full answer, which catches an engine that invented a row instead of picking a different legitimate one out of a tie.
 
 ### Five: exact against approximate distinct counts

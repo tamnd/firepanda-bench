@@ -4,6 +4,42 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### The ClickBench report is six blocks rather than one table of 43 rows
+
+Every other suite gets its grouping for free from the query registry, and ClickBench is one flat list of 43 with no groups in it. So the 43 now sit in six bands, each a contiguous range of ClickBench's own numbering, cut where the workload changes: seven scans, twelve group bys, eight where the work is in the filter or the sort, three over computed values, six with a wide or composite key, and seven page view queries inside a date window. Each band is a heading, a sentence saying what is in it, and a table of between three and twelve rows.
+
+The bands are reading order and not a taxonomy. Almost every query in this suite filters, groups and sorts at once, so a taxonomy would either put most of the suite in one bucket or need a query to be in three, and a range cannot overlap. A test checks the ranges are contiguous, cover all 43 and share nothing.
+
+`--queries scan` now runs one band, which beats rerunning 43 to look at a change in a Parquet reader.
+
+### A reader can tell the three agreement states apart without leaving the table
+
+A ClickBench query can agree, disagree, or be one the statement never determined an answer for, and the third one looked exactly like the second to anybody who had not read the suite README. Each row in the wall clock tables now carries the check behind it: `values` when every engine returned the same answer cell by cell, `shape only` when the statement does not determine which rows come back so the comparison was the row count and the column set. A query the engines genuinely disagreed on is in neither state and in no table, and its own section says so.
+
+A disagreement on a query whose values are never compared is the loud case that used to read as the mild one, since its name was also in the weaker section above. It now says the values were not compared at all, so what differed is the row count or the columns, and the statement left neither of those open.
+
+The list of undetermined queries belongs to a size, since which rows tie at the row a limit cuts on depends on how many rows there are. It was computed at 1M. When the report is describing a run at another size it now says the list was carried over rather than checked, and names the command that computes it for that size.
+
+### The scheduled run does ClickBench
+
+`bench.yml` runs the suite at 10M, which is ten times what CI's verify workflow runs and a tenth of the published size. 100M is the only size comparable to a published ClickBench number and it is a twelve gigabyte download onto a runner with fourteen gigabytes of disk.
+
+The partitions are cached between runs, because a hundred files a week from ClickHouse's bucket for a file that has not changed since 2022 is rude as well as slow. A restored cache is not trusted on the strength of its key: the data step rehashes every file against the manifest and fetches what does not match, so a partial cache costs a download rather than producing a wrong number.
+
+The timeout is fifteen minutes per engine per query rather than the harness default of an hour. An hour is sized for a fifty gigabyte join, and on a suite of 43 queries it means one hung pairing holds the runner for an hour while the other 128 never run.
+
+Which runners the job uses is now a repository variable rather than a line in the workflow, the same arrangement the GPU job already had. The README has said for months that a full run is on two machines and nothing is averaged across them, and registering the second one is now a settings change instead of a pull request. Unset, it is the one hosted runner it has always been.
+
+### The site charts what reading the file cost
+
+Wherever a suite ran in both io modes there is now a third chart over the pair: one engine's scan time divided by its own memory time, which is how much of a scan run went on opening the Parquet rather than on answering the query. It needs two result files to exist, which is why it is a chart and not a column in a table, and ClickBench is where it shows because the hits table is the widest one in the repository by a factor of ten.
+
+The number is per engine against itself and not against another engine. Far above one means the engine computes the answer so fast that reading is the whole query, which is where Polars lands on the narrow ones and is as much a statement about its group by as about its reader.
+
+### repro knows that a different ten rows out of a tie is the same answer
+
+`pixi run repro` compared the answer digest per pairing, which on the twelve undetermined ClickBench queries would report a dozen changed answers on a reproduction that reproduced. An engine is free to return a different ten rows out of a tie on a second run and several of them do, because the order a parallel aggregation finishes in is not fixed. Those queries are now compared on the row count, which the statement does determine, and one that came back with nine rows is still caught.
+
 ### The report says how our ClickBench numbers differ from the published ones
 
 ClickHouse publishes a ClickBench results table and a methodology, and ours differs from it in five ways. Somebody is going to put one of our numbers next to one from that table, and the difference between the two is partly the engine and partly this list, so the list is now in the report, above the numbers, rather than in a commit message.

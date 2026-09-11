@@ -56,7 +56,9 @@ PAGE = """<!doctype html>
 <p>One line per engine, two charts per machine, suite, size and io mode: wall clock
 and peak resident memory, because the claim is about both. Nothing is drawn across
 two of those four, because nothing is comparable across them. A regression is a
-step.</p>
+step. Where a suite ran in both io modes there is a third chart over the pair, one
+engine's scan time divided by its own memory time, which is how much of a scan run
+went on opening the Parquet rather than on answering the query.</p>
 <div id="history"></div>
 <script>
 const charts = {specs};
@@ -110,7 +112,12 @@ def markdown_to_html(text: str) -> str:
             in_table = False
         if not stripped:
             continue
-        if stripped.startswith("### "):
+        # Longest prefix first. A `#### band` tested against `### ` matches, and the
+        # band headings the ClickBench report is split into would come out as a
+        # level three heading with a stray hash in front of them.
+        if stripped.startswith("#### "):
+            out.append(f"<h4>{stripped[5:]}</h4>")
+        elif stripped.startswith("### "):
             out.append(f"<h3>{stripped[4:]}</h3>")
         elif stripped.startswith("## "):
             out.append(f"<h2>{stripped[3:]}</h2>")
@@ -171,6 +178,62 @@ def history(paths: list[Path]) -> list[dict]:
     return rows
 
 
+def gaps(rows: list[dict]) -> list[dict]:
+    """Pairs each query's scan timing with its memory timing from the same run.
+
+    This is the one measurement in the repository that needs two result files to
+    exist, which is why it is a chart of its own rather than a column in a table.
+    In memory mode every engine is handed the same Arrow table and the read is not
+    in the timed region. In scan mode each engine opens the Parquet itself, and
+    Polars and DuckDB push the projection into the file so a query naming two of
+    the 105 columns reads two of them. ClickBench is where that shows, because the
+    hits table is the widest one in the repository by a factor of ten.
+
+    The number is per engine and it is a ratio rather than a difference, so what it
+    says is how much of an engine's scan mode time went on opening the file. Near
+    one means the read cost nothing next to the computation. Far above one means
+    the engine computes the answer so fast that reading is the whole query, which
+    is where Polars ends up on the narrow ones and is a statement about how quick
+    its group by is as much as about its reader. Two engines' ratios are therefore
+    not comparable to each other the way two of the same engine's are, and neither
+    is any conclusion about which reader is faster: that lives in the scan mode
+    table in the report, where the seconds are.
+
+    Below one happens and is not a bug. Memory mode holds the whole table resident
+    for the length of the query and scan mode does not, and on a table this wide
+    that is a gigabyte of pressure the scan run never pays.
+
+    Args:
+        rows: The history records, both io modes together.
+
+    Returns:
+        One record per query, engine, date and machine where both modes ran.
+    """
+    seen: dict[tuple, dict[str, float]] = {}
+    for row in rows:
+        if not row["seconds"]:
+            continue
+        key = (row["date"], row["machine"], row["suite"], row["size"], row["query"], row["engine"])
+        seen.setdefault(key, {})[row["io"]] = row["seconds"]
+
+    paired = []
+    for (date, machine, suite, size, query, engine), modes in sorted(seen.items()):
+        if "scan" not in modes or "memory" not in modes:
+            continue
+        paired.append(
+            {
+                "date": date,
+                "machine": machine,
+                "suite": suite,
+                "size": size,
+                "query": query,
+                "engine": engine,
+                "gap": modes["scan"] / modes["memory"],
+            }
+        )
+    return paired
+
+
 def chart_specs(rows: list[dict]) -> list[dict]:
     """Splits the history into one chart per comparable group.
 
@@ -197,6 +260,20 @@ def chart_specs(rows: list[dict]) -> list[dict]:
         memory = [row for row in group if row.get("peak_mb")]
         if memory:
             charts.append({"title": f"{where}: peak MB", "spec": chart_spec(memory, "peak_mb")})
+
+    # Grouped without the io mode, since this chart is the comparison between the
+    # two modes and a group per mode would have nothing to compare.
+    together: dict[tuple, list[dict]] = {}
+    for row in gaps(rows):
+        together.setdefault((row["machine"], row["suite"], row["size"]), []).append(row)
+    for (machine, suite, size), group in sorted(together.items()):
+        charts.append(
+            {
+                "title": f"{suite} at {size} on {machine}: scan time over memory "
+                f"time, per engine, which is how much of a scan run was the read",
+                "spec": chart_spec(group, "gap"),
+            }
+        )
     return charts
 
 

@@ -40,8 +40,36 @@ def test_the_names_are_q0_through_q42_in_order():
 def test_every_entry_belongs_to_the_suite_and_reads_the_one_table():
     for query in query_registry.CLICKBENCH:
         assert query.suite == "clickbench"
-        assert query.group == "clickbench"
+        assert query.group in query_registry.CLICKBENCH_BANDS
         assert query.needs == ("hits",)
+
+
+def test_every_query_is_in_exactly_one_band():
+    # The bands are what the report splits its table into, so a query in two of
+    # them is a query counted twice and a query in none of them is one that quietly
+    # stops being published.
+    banded = [name for names, _ in query_registry.CLICKBENCH_BANDS.values() for name in names]
+    assert sorted(banded) == sorted(q.name for q in query_registry.CLICKBENCH)
+    assert len(banded) == len(set(banded)) == 43
+
+
+def test_every_band_is_a_contiguous_range_of_the_published_numbering():
+    # They are reading order and not a taxonomy. Almost every query in this suite
+    # filters, groups and sorts at once, so a taxonomy would either put most of the
+    # suite in one bucket or need a query in three, and a range cannot overlap.
+    seen = []
+    for names, _ in query_registry.CLICKBENCH_BANDS.values():
+        numbers = [int(name[1:]) for name in names]
+        assert numbers == list(range(numbers[0], numbers[-1] + 1))
+        seen.append(numbers[0])
+    assert seen == sorted(seen)
+
+
+def test_every_band_says_what_is_in_it():
+    # The sentence goes under the heading in the report. A heading that is one word
+    # is a heading that gets skipped.
+    for band, (_, blurb) in query_registry.CLICKBENCH_BANDS.items():
+        assert len(blurb) > 120, f"the {band} band has a sentence nobody would read"
 
 
 def test_every_entry_says_what_it_computes_and_what_it_exposes():
@@ -52,14 +80,16 @@ def test_every_entry_says_what_it_computes_and_what_it_exposes():
         assert len(query.why) > 120, f"{query.name} has a why nobody would read"
 
 
-def test_the_suite_is_registered_and_has_a_group():
+def test_the_suite_is_registered_and_its_groups_are_the_bands():
     assert query_registry.SUITES["clickbench"] is query_registry.CLICKBENCH
-    assert query_registry.GROUPS["clickbench"] == ("clickbench",)
+    assert query_registry.GROUPS["clickbench"] == tuple(query_registry.CLICKBENCH_BANDS)
 
 
-def test_the_group_name_selects_the_whole_suite():
-    selected = query_registry.select("clickbench", "clickbench")
-    assert len(selected) == 43
+def test_a_band_name_selects_that_band_and_nothing_else():
+    # Rerunning seven queries to look at a change in a Parquet reader beats
+    # rerunning 43.
+    selected = query_registry.select("derived", "clickbench")
+    assert [q.name for q in selected] == ["q27", "q28", "q29"]
 
 
 def test_all_selects_the_whole_suite():

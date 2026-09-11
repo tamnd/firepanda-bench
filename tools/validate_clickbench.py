@@ -14,7 +14,7 @@ can tell a right decision from a popular one. Its answers are checked in under
 `suites/clickbench/expected/` so that a change to either side turns up in a diff
 rather than in a number.
 
-The second is the tie set. Thirteen queries at 1M return ten rows out of a group
+The second is the tie set. Twelve queries at 1M return ten rows out of a group
 that the ordering expression cannot tell apart, so which ten come back is the
 engine's choice and not the statement's. Which queries those are is a fact about
 the data and changes with the size, so `tools/queries.py` cannot simply be believed
