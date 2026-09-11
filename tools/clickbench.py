@@ -1,0 +1,363 @@
+#!/usr/bin/env python3
+"""The hits table, downloaded rather than generated, because there is no generator.
+
+Every other suite here makes its own data. db-benchmark comes out of a splitmix64
+counter stream, which is what lets firepanda produce the same bytes without owning
+a Parquet decoder, and the ingestion files come out of the same generator. TPC-H
+already broke that by coming from `dbgen`, and `tpch.py` handles it by asking
+DuckDB's extension to run the generator. ClickBench breaks it harder: the hits
+table is a dump of what a real product recorded, there is no seed and no
+generator anywhere, and the only way to get it is to download it.
+
+That is not a footnote. It is the reason this suite finds things the other three
+cannot. A generator produces uniform key distributions, tidy types and no missing
+data unless somebody works at making it not, and everything in this library has
+been optimized against exactly that. The hits table has skewed cardinalities, a
+`URL` column with a heavy tail, empty strings standing in for nulls, and 105
+columns of which most queries touch three.
+
+The files come in two forms and this uses the partitioned one. There is a single
+`hits.parquet` of 14,779,976,446 bytes holding all 99,997,497 rows, and there are
+one hundred `hits_{0..99}.parquet` of about 122 MB each holding the same rows cut
+a hundred ways. Downloading one partition is what makes a CI size possible at
+all: a job that has to pull fourteen gigabytes before it can check that four
+engines agree is a job nobody will keep green.
+
+Nothing here converts to CSV. ClickBench publishes a TSV form, nobody benchmarks
+against it any more, the ingestion suite is where a reader gets measured, and a
+seventy gigabyte text file in the cache helps nothing.
+
+Usage:
+    python tools/clickbench.py --size 1M
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import shutil
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+# Where the partitions live. This is the `hits_compatible` form, which is the one
+# every engine in the published table reads, rather than the ClickHouse native
+# form which is a different schema.
+BASE_URL = "https://datasets.clickhouse.com/hits_compatible/athena_partitioned"
+
+# How many partitions each size takes, from the front. The names are row counts
+# rather than byte counts, matching the ingestion suite, because what varies
+# between these is how many rows there are and not what shape they are in.
+#
+# Only `100M` is ClickBench. The other two exist because a suite that can only be
+# run on one machine with a spare hundred gigabytes is a suite that gets run four
+# times a year, and because the verify job needs a size it can pull inside a
+# normal CI run. A number from a partial size is not comparable to a published
+# one and the report labels it on the table rather than in a footnote.
+SIZES = {"1M": 1, "10M": 10, "100M": 100}
+
+# The published row count of the whole dataset, for checking that a full download
+# is actually the full dataset. Partial sizes have no published count, so their
+# row counts are measured and recorded rather than checked.
+FULL_ROWS = 99_997_497
+
+# How much room to insist on beyond the size of the files themselves. A download
+# that fills the disk leaves a truncated file behind and the next run has to be
+# told to start over, so it is worth refusing early.
+HEADROOM_BYTES = 2 << 30
+
+# Read size for downloading and for hashing. Large enough that the syscall
+# overhead disappears, small enough that a failed download does not lose much.
+CHUNK_BYTES = 1 << 22
+
+# The bucket sits behind Cloudflare and Cloudflare answers 403 to urllib's default
+# `Python-urllib/3.13`. Nothing about the file is restricted, curl fetches it
+# without any header at all, it is the user agent alone that is refused. So this
+# says who we are, which is what the header is for, and the 403 goes away.
+USER_AGENT = "firepanda-bench (+https://github.com/tamnd/firepanda-bench)"
+
+
+def partition_url(index: int) -> str:
+    """Returns the URL of one partition.
+
+    Args:
+        index: Which partition, from zero.
+
+    Returns:
+        The URL.
+    """
+    return f"{BASE_URL}/hits_{index}.parquet"
+
+
+def remote_size(url: str) -> int:
+    """Asks the server how large a file is, without downloading it.
+
+    This runs for every partition before the first byte of any of them is pulled,
+    which is what makes the free space check worth having. A hundred HEAD requests
+    cost a couple of seconds and refusing after eighty files have landed costs a
+    lot more than that.
+
+    Args:
+        url: The file URL.
+
+    Returns:
+        The size in bytes.
+
+    Raises:
+        SystemExit: If the server cannot be reached or does not say.
+    """
+    request = urllib.request.Request(url, method="HEAD", headers={"User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            length = response.headers.get("Content-Length")
+    except urllib.error.URLError as exc:
+        raise SystemExit(f"cannot reach {url}: {exc}") from exc
+    if not length:
+        raise SystemExit(f"{url} did not report a size, so the disk check cannot run")
+    return int(length)
+
+
+def download(url: str, path: Path, expected: int) -> None:
+    """Fetches one file, resuming a partial download if there is one.
+
+    A hundred files over a slow link will be interrupted at least once, so the
+    bytes land in a `.part` file and a restart asks the server to continue from
+    where that file ends. A server that will not do ranges is handled by starting
+    again, which is slower and is not wrong.
+
+    Args:
+        url: The file URL.
+        path: Where the finished file goes.
+        expected: How many bytes the server said there are.
+
+    Raises:
+        SystemExit: If the download fails or ends at the wrong length.
+    """
+    part = path.with_suffix(path.suffix + ".part")
+    have = part.stat().st_size if part.exists() else 0
+    if have > expected:
+        # A leftover from an earlier run against a different file. Starting over
+        # is the only safe reading of this.
+        part.unlink()
+        have = 0
+
+    if have == expected:
+        part.replace(path)
+        return
+
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    mode = "wb"
+    if have:
+        request.add_header("Range", f"bytes={have}-")
+        mode = "ab"
+
+    try:
+        with urllib.request.urlopen(request, timeout=300) as response:
+            if have and response.status != 206:
+                # The server ignored the range and is sending the whole file.
+                have = 0
+                mode = "wb"
+            with open(part, mode) as handle:
+                while True:
+                    block = response.read(CHUNK_BYTES)
+                    if not block:
+                        break
+                    handle.write(block)
+    except urllib.error.URLError as exc:
+        raise SystemExit(f"downloading {url} failed: {exc}") from exc
+
+    landed = part.stat().st_size
+    if landed != expected:
+        raise SystemExit(
+            f"{url} was {expected} bytes and {landed} arrived. The partial file is "
+            f"at {part} and another run will resume from it."
+        )
+    part.replace(path)
+
+
+def digest(path: Path) -> str:
+    """Returns the SHA-256 of a file.
+
+    Args:
+        path: The file.
+
+    Returns:
+        The digest as hex.
+    """
+    hasher = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(CHUNK_BYTES), b""):
+            hasher.update(block)
+    return hasher.hexdigest()
+
+
+def describe(path: Path) -> dict:
+    """Reads what the manifest records about one partition.
+
+    The row count comes out of the Parquet footer rather than out of a read, so
+    this costs a seek rather than a pass over the file.
+
+    Args:
+        path: The partition.
+
+    Returns:
+        The manifest entry, without the digest.
+
+    Raises:
+        SystemExit: If the file is not readable as Parquet, which is what a
+            truncated download looks like.
+    """
+    import pyarrow.parquet as pq
+
+    try:
+        metadata = pq.ParquetFile(path).metadata
+    except Exception as exc:
+        raise SystemExit(
+            f"{path} is not readable as Parquet, which usually means the download "
+            f"was truncated. Delete it and run again: {exc}"
+        ) from exc
+    return {
+        "path": str(path),
+        "bytes": path.stat().st_size,
+        "rows": metadata.num_rows,
+        "columns": metadata.num_columns,
+    }
+
+
+def check_room(needed: int, out: Path) -> None:
+    """Refuses before the first byte if the disk cannot hold the files.
+
+    Args:
+        needed: How many bytes the files come to.
+        out: The directory they go in.
+
+    Raises:
+        SystemExit: If there is not enough room.
+    """
+    out.mkdir(parents=True, exist_ok=True)
+    free = shutil.disk_usage(out).free
+    if free < needed + HEADROOM_BYTES:
+        raise SystemExit(
+            f"{out} has {free / 1e9:.1f} GB free and this needs "
+            f"{(needed + HEADROOM_BYTES) / 1e9:.1f} GB, which is the files plus "
+            f"{HEADROOM_BYTES / 1e9:.0f} GB of room to work in."
+        )
+
+
+def verify(files: dict, recorded: dict) -> bool:
+    """Checks that the files on disk are the ones the manifest describes.
+
+    A truncated download that is never noticed is a wrong answer rather than an
+    error, which is the whole reason the digests are recorded.
+
+    Args:
+        files: What is on disk now, keyed by partition name.
+        recorded: What the manifest says.
+
+    Returns:
+        Whether everything matches.
+    """
+    for name, entry in recorded.items():
+        path = Path(entry["path"])
+        if not path.exists():
+            print(f"  {name} is missing")
+            return False
+        if path.stat().st_size != entry["bytes"]:
+            print(f"  {name} is {path.stat().st_size} bytes and should be {entry['bytes']}")
+            return False
+        if name in files and files[name] != entry.get("sha256"):
+            print(f"  {name} does not match the recorded digest")
+            return False
+    return True
+
+
+def build(size: str, root: Path, force: bool, skip_digest: bool = False) -> Path:
+    """Downloads the partitions a size needs and writes a manifest beside them.
+
+    Args:
+        size: The size name.
+        root: The data root.
+        force: Whether to fetch files that are already there.
+        skip_digest: Whether to trust the byte counts instead of rehashing. The
+            full size is twelve gigabytes and hashing it costs half a minute, so
+            a scheduled run that has already checked once can skip it.
+
+    Returns:
+        The manifest path.
+
+    Raises:
+        SystemExit: If the size is unknown or the download cannot be completed.
+    """
+    if size not in SIZES:
+        raise SystemExit(f"unknown ClickBench size '{size}'. Known: {', '.join(SIZES)}")
+
+    count = SIZES[size]
+    out = root / "clickbench" / size
+    manifest_path = out / "manifest.json"
+
+    if manifest_path.exists() and not force:
+        recorded = json.loads(manifest_path.read_text())
+        print(f"{manifest_path} exists, checking it before reusing it")
+        present = {}
+        if not skip_digest:
+            for name, entry in recorded["files"].items():
+                path = Path(entry["path"])
+                if path.exists():
+                    present[name] = digest(path)
+        if verify(present, recorded["files"]):
+            print("  every file is the one recorded. Pass --force to fetch again.")
+            return manifest_path
+        print("  the cache does not match the manifest, fetching what is missing")
+
+    sizes = {}
+    print(f"asking for the size of {count} partition{'s' if count > 1 else ''}")
+    for index in range(count):
+        sizes[f"hits_{index}"] = remote_size(partition_url(index))
+    total = sum(sizes.values())
+    print(f"  {total / 1e9:.2f} GB")
+    check_room(total, out)
+
+    files = {}
+    started = time.perf_counter()
+    fetched = 0
+    for index in range(count):
+        name = f"hits_{index}"
+        path = out / f"{name}.parquet"
+        if path.exists() and path.stat().st_size == sizes[name] and not force:
+            print(f"  {name} is already here")
+        else:
+            began = time.perf_counter()
+            download(partition_url(index), path, sizes[name])
+            took = time.perf_counter() - began
+            fetched += sizes[name]
+            rate = sizes[name] / took / 1e6 if took else 0
+            print(f"  {name} {sizes[name] / 1e6:7.1f} MB in {took:5.1f} s  {rate:6.1f} MB/s")
+        entry = describe(path)
+        entry["sha256"] = digest(path)
+        files[name] = entry
+
+    rows = sum(entry["rows"] for entry in files.values())
+    if count == SIZES["100M"] and rows != FULL_ROWS:
+        raise SystemExit(
+            f"the full dataset is {FULL_ROWS:,} rows and {rows:,} arrived, so "
+            "something is missing. Run again with --force."
+        )
+
+    manifest = {
+        "suite": "clickbench",
+        "size": size,
+        "rows": rows,
+        "partitions": count,
+        "bytes": sum(entry["bytes"] for entry in files.values()),
+        "columns": next(iter(files.values()))["columns"],
+        "source": BASE_URL,
+        "generator": "none, this dataset is downloaded and cannot be regenerated",
+        "is_published_size": size == "100M",
+        "downloaded_s": round(time.perf_counter() - started, 3),
+        "downloaded_bytes": fetched,
+        "files": files,
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    print(f"wrote {manifest_path}  {rows:,} rows in {count} file(s)")
+    return manifest_path
