@@ -30,6 +30,7 @@ import pyarrow as pa
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import clickbench
 import metrics
 import queries
 
@@ -89,6 +90,14 @@ def table_paths(
             table.
     """
     paths = {}
+    if manifest.get("suite") == "clickbench":
+        # The only dataset here that is more than one file per table. Its manifest
+        # records a row per partition, `hits_0` through `hits_99`, and no entry
+        # under the table name the queries read, so the lookup below has nothing to
+        # find. What goes back is the pattern rather than a list, because the
+        # signature every engine takes is one path per table and DuckDB reads a
+        # glob as it stands. `clickbench.partitions` expands it for the rest.
+        return {t: str(root / clickbench.PARTITION_GLOB.format(table=t)) for t in needed}
     for table in needed:
         entry = manifest["files"].get(table)
         if entry is None or fmt not in entry:

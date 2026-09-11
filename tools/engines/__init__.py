@@ -50,6 +50,19 @@ KNOWN = ("pandas", "polars", "duckdb", "firepanda")
 IO_MODES = ("memory", "scan")
 
 
+# Which attribute holds an engine's callables for each suite. db-benchmark is not
+# in here because it came first and owns the unprefixed name, and a suite missing
+# from this table would silently fall through to it: it would be handed the
+# db-benchmark callables and report an engine that ran the wrong queries rather
+# than one that skipped the suite. Adding a suite means adding a line here.
+QUERY_ATTRIBUTE = {
+    "tpch": "TPCH_QUERIES",
+    "ingestion": "INGESTION_QUERIES",
+    "clickbench": "CLICKBENCH_QUERIES",
+    "db-benchmark": "QUERIES",
+}
+
+
 def query_map(module, suite: str) -> dict:
     """Returns an engine's callables for one suite.
 
@@ -60,12 +73,13 @@ def query_map(module, suite: str) -> dict:
     Returns:
         A mapping from query name to a callable taking the loaded context. Empty
         if the engine does not implement the suite at all.
+
+    Raises:
+        SystemExit: If the suite is not one this knows about.
     """
-    if suite == "tpch":
-        return getattr(module, "TPCH_QUERIES", {})
-    if suite == "ingestion":
-        return getattr(module, "INGESTION_QUERIES", {})
-    return getattr(module, "QUERIES", {})
+    if suite not in QUERY_ATTRIBUTE:
+        raise SystemExit(f"no engine attribute is registered for suite '{suite}'")
+    return getattr(module, QUERY_ATTRIBUTE[suite], {})
 
 
 def load_engine(name: str):
@@ -232,7 +246,18 @@ def column_sums(table: pa.Table) -> dict[str, float]:
             # Through float64 whatever it started as, because two engines that
             # answer with a decimal and a double are not in disagreement about
             # the answer.
-            sums[name] = float(pc.sum(pc.cast(column, pa.float64())).as_py() or 0.0)
+            #
+            # Unsafely, and that word is doing less than it looks like. Arrow's
+            # safe cast refuses an integer past 2^53 because float64 cannot hold
+            # it exactly, which is true and is not a reason to refuse here: the
+            # value goes into a sum that is rounded to nine significant figures
+            # before anything compares it, so a difference in the low bits was
+            # never going to be visible. The first three suites never hit it
+            # because their integers are small. ClickBench answers with `WatchID`,
+            # `UserID`, `URLHash` and `RefererHash`, which are full width sixty
+            # four bit hashes, and the safe cast turned q18 and q23 into engine
+            # failures rather than into measurements.
+            sums[name] = float(pc.sum(pc.cast(column, pa.float64(), safe=False)).as_py() or 0.0)
         elif pa.types.is_temporal(column.type):
             micros = pc.cast(pc.cast(column, pa.timestamp("us")), pa.int64())
             sums[name] = float(pc.sum(micros).as_py() or 0.0)
