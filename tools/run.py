@@ -170,12 +170,18 @@ def measure_one(
 AGREEMENT_TOLERANCE = 1e-7
 
 
-def answers_match(left: metrics.Measurement, right: metrics.Measurement) -> bool:
+def answers_match(
+    left: metrics.Measurement, right: metrics.Measurement, values: bool = True
+) -> bool:
     """Says whether two engines produced the same answer.
 
     Args:
         left: One measurement.
         right: The other.
+        values: Whether the values are part of the question. False for a query
+            whose statement does not determine which rows come back, where two
+            engines returning different rows are both right and the only things
+            that can be compared are how many rows and which columns.
 
     Returns:
         Whether the row counts are equal, every column sum is within the
@@ -186,6 +192,8 @@ def answers_match(left: metrics.Measurement, right: metrics.Measurement) -> bool
         return False
     if set(left.sums) != set(right.sums):
         return False
+    if not values:
+        return set(left.hashes) == set(right.hashes)
     for name, value in left.sums.items():
         other = right.sums[name]
         # A not a number first, because every comparison against one is false and
@@ -212,7 +220,7 @@ def answers_match(left: metrics.Measurement, right: metrics.Measurement) -> bool
     return not (left.hashes and right.hashes and left.hashes != right.hashes)
 
 
-def agreement(measurements: list[metrics.Measurement]) -> dict[str, dict]:
+def agreement(measurements: list[metrics.Measurement], suite: str) -> dict[str, dict]:
     """Groups the answers by query and reports whether the engines agreed.
 
     This is the check that stops the harness from publishing a comparison in which
@@ -225,8 +233,20 @@ def agreement(measurements: list[metrics.Measurement]) -> dict[str, dict]:
     that turned four TPC-H queries into reported disagreements on a run where all
     three engines had matched the specification's published answers exactly.
 
+    Thirteen ClickBench queries get a weaker comparison and say so. Their
+    statements do not determine which rows come back, so two engines returning
+    different rows are both right, and comparing the values would report thirteen
+    disagreements on every run of a suite that has none. What is compared instead
+    is the row count and the column set, which the statements do determine. The
+    entry carries the reason, so a reader is told the check was weaker rather than
+    left to assume all 43 were checked the same way, and the queries are not
+    quietly dropped: an engine that answered one of them with five rows or with
+    the wrong columns still fails.
+
     Args:
         measurements: Every measurement in the run.
+        suite: Which suite ran, which is what decides whether a query name means
+            an undetermined query. Query names collide between the suites.
 
     Returns:
         A mapping from query name to the digests seen and whether the answers
@@ -239,10 +259,14 @@ def agreement(measurements: list[metrics.Measurement]) -> dict[str, dict]:
     report = {}
     for query, seen in by_query.items():
         first = seen[0]
-        report[query] = {
-            "agreed": all(answers_match(first, other) for other in seen[1:]),
+        reason = query_registry.undetermined(suite, query)
+        entry = {
+            "agreed": all(answers_match(first, other, not reason) for other in seen[1:]),
             "by_engine": {m.engine: f"{m.rows_out}:{m.checksum}" for m in seen},
         }
+        if reason:
+            entry["undetermined"] = reason
+        report[query] = entry
     return report
 
 
@@ -484,7 +508,7 @@ def main(argv: list[str] | None = None) -> int:
         "runs": args.runs,
         "dataset": json.loads(manifest.read_text()),
         "wall_s": round(elapsed, 3),
-        "agreement": agreement(measurements),
+        "agreement": agreement(measurements, args.suite),
         "results": {},
         "detail": {},
     }

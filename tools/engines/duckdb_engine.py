@@ -155,8 +155,13 @@ def load_clickbench(connection, pattern: str, io: str) -> dict:
             f"CREATE OR REPLACE VIEW hits AS SELECT {CLICKBENCH_PROJECTION} "
             f"FROM read_parquet('{sql_literal(pattern)}', binary_as_string=True)"
         )
+        described = connection.execute("DESCRIBE hits").fetchall()
+        clickbench.check_text({name: kind == "VARCHAR" for name, kind, *_ in described}, "duckdb")
         return {"con": connection, "tables": {}}
     table = clickbench.retype(pq.read_table(clickbench.partitions(pattern)))
+    clickbench.check_text(
+        {field.name: pa.types.is_string(field.type) for field in table.schema}, "duckdb"
+    )
     connection.register("hits", table)
     return {"con": connection, "tables": {"hits": table}}
 

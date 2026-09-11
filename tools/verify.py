@@ -44,6 +44,10 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.compute as pc
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import queries as query_registry
+
 ROOT = Path(__file__).resolve().parent.parent
 
 # Where a checkout is looked for when nobody says. A sibling of this repository,
@@ -367,6 +371,60 @@ def reference_engine(engines: dict[str, Path]) -> str:
     return REFERENCE if REFERENCE in engines else sorted(engines)[0]
 
 
+def shape_only(result: dict, engines: dict[str, Path]) -> dict:
+    """Compares answers on their row count and their columns, and not on the rows.
+
+    What is left to check when the statement does not say which rows come back.
+    The row count is determined, the column names are determined and so are their
+    types, so an engine that answered with five rows instead of ten, or lost a
+    column, or answered with an integer where everybody else has a date, is still
+    caught. An engine that returned a different legitimate ten is not.
+
+    Deliberately not routed through the comparison layer with a relaxation. A
+    relaxation is a statement that two answers are the same answer under a rule,
+    and these answers are different answers that the query permits equally, which
+    is a different claim and belongs in a different function.
+
+    Args:
+        result: The verdict being filled in, already carrying the reference.
+        engines: The answer file per engine.
+
+    Returns:
+        The verdict.
+    """
+    base = result["reference"]
+    shapes: dict[str, tuple] = {}
+    for name in sorted(engines):
+        try:
+            table = read_answer(engines[name])
+        except Exception as exc:
+            result["agreed"] = False
+            result["engines"][name] = {"equal": False, "differences": [f"unreadable: {exc}"]}
+            continue
+        shapes[name] = (
+            table.num_rows,
+            tuple(table.schema.names),
+            tuple(str(field.type) for field in table.schema),
+        )
+    if base not in shapes:
+        return result
+    result["rows"] = shapes[base][0]
+    for name, shape in shapes.items():
+        if shape == shapes[base]:
+            result["engines"][name] = {"equal": True, "differences": []}
+            continue
+        differences = []
+        if shape[0] != shapes[base][0]:
+            differences.append(f"{shape[0]} rows against {shapes[base][0]}")
+        if shape[1] != shapes[base][1]:
+            differences.append(f"columns {list(shape[1])} against {list(shapes[base][1])}")
+        elif shape[2] != shapes[base][2]:
+            differences.append(f"types {list(shape[2])} against {list(shapes[base][2])}")
+        result["engines"][name] = {"equal": False, "differences": differences}
+        result["agreed"] = False
+    return result
+
+
 def verify_query(compare, suite: str, query: str, engines: dict[str, Path]) -> dict:
     """Compares every engine's answer for one query against the reference.
 
@@ -379,6 +437,24 @@ def verify_query(compare, suite: str, query: str, engines: dict[str, Path]) -> d
     Returns:
         A verdict document for the query.
     """
+    # A query whose statement does not determine which rows come back is compared
+    # on its shape and not on its values, and the verdict says which. Before the
+    # tolerance is chosen and before the comparison layer is touched at all,
+    # because this is the stronger of the two checks in the repository and leaving
+    # it as it was would mean the strongest check is the one that fails hardest on
+    # the thirteen queries where a difference is not a defect.
+    reason = query_registry.undetermined(suite, query)
+    if reason:
+        return shape_only(
+            {
+                "reference": reference_engine(engines),
+                "rows": 0,
+                "engines": {},
+                "agreed": True,
+                "undetermined": reason,
+            },
+            engines,
+        )
     tolerance = compare.Tolerance[TOLERANCE.get((suite, query), DEFAULT_TOLERANCE)]
     rules = compare.Rules(
         tolerance=tolerance,
@@ -529,6 +605,11 @@ def render(document: dict) -> str:
         state = "agree" if entry["agreed"] else "DISAGREE"
         if entry["agreed"] and known:
             state = f"agree, {', '.join(known)} under a known difference"
+        if entry.get("undetermined"):
+            state = (
+                f"{'same shape' if entry['agreed'] else 'DIFFERENT SHAPE'}, values not "
+                f"compared because {entry['undetermined']}"
+            )
         lines.append(
             f"{name}: {state}, {entry['rows']} rows, "
             f"{', '.join(others)} against {entry['reference']}"
@@ -571,6 +652,12 @@ def render(document: dict) -> str:
         lines.append(
             f"all {len(document['queries'])} queries agree, row by row and value by "
             "value, exactly where nothing above says otherwise"
+        )
+    weak = [name for name, entry in document["queries"].items() if entry.get("undetermined")]
+    if weak:
+        lines.append(
+            f"{len(weak)} of those were compared on shape alone, because their "
+            "statements do not determine which rows come back: " + ", ".join(weak)
         )
     if document.get("known_unused"):
         lines.append(
