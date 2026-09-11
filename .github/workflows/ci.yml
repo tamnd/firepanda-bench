@@ -53,6 +53,15 @@ jobs:
       - name: Results are self-describing
         run: python3 tools/validate_results.py results/
 
+      # The numbers in the suite READMEs are written by a script between markers, and
+      # a checkout has no result files in it, so what this can check here is that the
+      # digest in the closing marker still matches the block. That catches the edit
+      # somebody makes by hand in the GitHub web editor, which is how a generated
+      # block rots. The stale against the results case is checked where the results
+      # are, which is the scheduled run.
+      - name: README blocks have not been edited by hand
+        run: python3 tools/suite_readme.py --check
+
       # The suite is only credible if it reports losses. This is a crude check and it
       # is better than nothing: a published comparison in which firepanda wins every
       # single row, or in which a competing engine crashed on a whole query group,

@@ -9,6 +9,14 @@ python tools/data.py --suite ingestion --size 10M
 python tools/run.py --suite ingestion --size 10M --engines all --runs 7
 ```
 
+<!-- suite-readme: generated, do not edit between these markers -->
+
+## Where this suite stands
+
+No run has been folded in here yet. `pixi run suite-readme` writes this block from the result files of the last run, one table per machine, size and io mode, with speed, throughput, latency spread, peak memory, CPU and coverage per engine against pandas. The scheduled run opens a pull request with the refreshed numbers, so what is here is always a state somebody reviewed.
+
+<!-- suite-readme: end, sha256 e9404828c2ef2a54 -->
+
 ## Why this suite matters more than its size suggests
 
 `read_csv` is the first line of code almost every user writes. First impressions are made here, before anyone has run a single aggregation, and a library that is fast at group by and slow to load a file will be judged on the second thing.

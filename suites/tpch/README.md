@@ -2,6 +2,14 @@
 
 All 22 queries at scale factor 1 and scale factor 10.
 
+<!-- suite-readme: generated, do not edit between these markers -->
+
+## Where this suite stands
+
+No run has been folded in here yet. `pixi run suite-readme` writes this block from the result files of the last run, one table per machine, size and io mode, with speed, throughput, latency spread, peak memory, CPU and coverage per engine against pandas. The scheduled run opens a pull request with the refreshed numbers, so what is here is always a state somebody reviewed.
+
+<!-- suite-readme: end, sha256 e9404828c2ef2a54 -->
+
 ## What this suite is for
 
 Where db-benchmark stresses group by and join in isolation, TPC-H stresses the optimizer. The wins here come from projection pushdown, predicate pushdown, join ordering and partition pruning rather than from kernel speed.

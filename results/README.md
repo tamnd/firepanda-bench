@@ -1,6 +1,6 @@
 # Result history
 
-Result files land here when you run the harness and they are not committed. Every scheduled run uploads them as a workflow artifact, kept for ninety days, and the published site is drawn from them. Download the artifact for the run you care about, drop the files in this directory, and `pixi run report <file>` and `pixi run repro <file>` work on them exactly as they do on a local run.
+Result files land here when you run the harness and they are not committed. Every scheduled run uploads them as a workflow artifact, kept for ninety days, and the published site is drawn from them. Download the artifact for the run you care about, drop the files in this directory, and `pixi run report <file>` and `pixi run repro <file>` work on them exactly as they do on a local run. `pixi run suite-readme` works on them too, and writes what it finds into the suite READMEs, which is worth knowing before you run it with somebody else's files in here.
 
 Files are named `<date>-<host>-<suite>-<size>-<io>.json`. The io mode is in the name because a scan run and a memory run of the same suite at the same size are two different measurements, and the host is in the name because two machines running the same thing on the same day would otherwise produce the same file name and the second one copied here would silently replace the first. `env.json` is the machine description, written by `pixi run env-report`, and it is not a result file.
 

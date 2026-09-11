@@ -2,6 +2,14 @@
 
 Ten group-by queries and five join queries. The standard comparison for this class of library.
 
+<!-- suite-readme: generated, do not edit between these markers -->
+
+## Where this suite stands
+
+No run has been folded in here yet. `pixi run suite-readme` writes this block from the result files of the last run, one table per machine, size and io mode, with speed, throughput, latency spread, peak memory, CPU and coverage per engine against pandas. The scheduled run opens a pull request with the refreshed numbers, so what is here is always a state somebody reviewed.
+
+<!-- suite-readme: end, sha256 e9404828c2ef2a54 -->
+
 ## Which version
 
 [`duckdblabs/db-benchmark`](https://github.com/duckdblabs/db-benchmark), which is the DuckDB Labs revival and the version everyone now cites. h2oai stopped maintaining the original in 2021.

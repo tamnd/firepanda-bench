@@ -6,6 +6,14 @@ Status: not wired up. `tools/queries.py` knows about db-benchmark and TPC-H only
 
 Because the queries here are ours, this suite carries a burden the other two do not. db-benchmark and TPC-H are credible because somebody else wrote them. This one has to earn it, and the fifth column below is most of how.
 
+<!-- suite-readme: generated, do not edit between these markers -->
+
+## Where this suite stands
+
+No run has been folded in here yet. `pixi run suite-readme` writes this block from the result files of the last run, one table per machine, size and io mode, with speed, throughput, latency spread, peak memory, CPU and coverage per engine against pandas. The scheduled run opens a pull request with the refreshed numbers, so what is here is always a state somebody reviewed.
+
+<!-- suite-readme: end, sha256 e9404828c2ef2a54 -->
+
 ## The claim being tested
 
 Every fast dataframe library today is a fast engine in one language with a Python veneer. The moment a user writes a function the library did not anticipate, they leave the fast language and enter the slow one. That is why `df.apply(lambda ...)` falls off a cliff in pandas, and it is structural rather than a missing optimization.

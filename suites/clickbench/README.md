@@ -2,6 +2,14 @@
 
 All 43 queries over one table of 99,997,497 rows and 105 columns of real anonymized web analytics traffic, published by ClickHouse at [ClickHouse/ClickBench](https://github.com/ClickHouse/ClickBench).
 
+<!-- suite-readme: generated, do not edit between these markers -->
+
+## Where this suite stands
+
+No run has been folded in here yet. `pixi run suite-readme` writes this block from the result files of the last run, one table per machine, size and io mode, with speed, throughput, latency spread, peak memory, CPU and coverage per engine against pandas. The scheduled run opens a pull request with the refreshed numbers, so what is here is always a state somebody reviewed.
+
+<!-- suite-readme: end, sha256 e9404828c2ef2a54 -->
+
 ## Checking answers for a suite that publishes none
 
 TPC-H has the validation output the TPC publishes with the specification, and `pixi run validate-tpch` checks all 66 implementations against it cell by cell. That check found two real problems before any number here was published. ClickBench publishes no answers, so this suite starts without the strongest check the repository has.

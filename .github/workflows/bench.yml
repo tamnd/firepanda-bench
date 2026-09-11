@@ -226,3 +226,58 @@ jobs:
         with:
           path: site
       - uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5
+
+  # The numbers in the READMEs come from here, as a pull request rather than as a
+  # push. A number that lands in a commit nobody reviewed is a number nobody
+  # checked, and this is the run whose numbers a human most wants to look at before
+  # they become the front page. Between runs the README is the last reviewed state
+  # and says which run it came from, which is more honest than a number that could
+  # have changed under the reader an hour ago.
+  readme:
+    name: Refresh the README numbers
+    needs: run
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # The one checkout in this repository that keeps its credentials, because
+      # this is the one job that has a branch to push. Everything else checks out
+      # with them off.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 # zizmor: ignore[artipacked]
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: results-*
+          merge-multiple: true
+          path: results
+      - uses: ./.github/actions/setup-pixi
+      - name: Write the blocks
+        run: pixi run suite-readme --results results
+      # Written out by hand rather than with a third party action, because the one
+      # thing this job has that no other job here has is a credential that can
+      # write to the repository, and the fewer pieces of somebody else's code that
+      # run while it is in the environment the better. `git add` names the two
+      # paths, `results/*.json` is gitignored, and the result files go no further
+      # than this runner either way.
+      - name: Open a pull request with them
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md suites/*/README.md
+          if git diff --cached --quiet; then
+            echo "the numbers did not move, so there is nothing to open"
+            exit 0
+          fi
+          git checkout -b readme-numbers-${{ github.run_id }}
+          git commit -m "Refresh the numbers in the suite READMEs"
+          git push origin HEAD
+          gh pr create \
+            --title "Refresh the numbers in the suite READMEs" \
+            --label documentation \
+            --body "Opened by the scheduled benchmark run. Everything in it is between the \`suite-readme\` markers and was written by \`pixi run suite-readme\` from the result files that run produced, which are attached to the run as artifacts.
+
+          Worth reading rather than merging on sight, because this is the change that puts a number on the front page. The run's step summary has the same numbers per query, and a row that moved a long way with no commit behind it is usually a noisy runner rather than a result."
