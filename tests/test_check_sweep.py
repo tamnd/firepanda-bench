@@ -155,3 +155,50 @@ def test_low_coverage_is_flagged():
         }
         results[f"q{index}/pandas"] = {"ok": True, "median_s": 1.0, "peak_rss_bytes": 100}
     assert any("ran 3 of 16" in c for c in check_sweep.review(_document(results)))
+
+
+def _clickbench(query: str) -> dict:
+    """Builds a ClickBench document where firepanda is implausibly far ahead.
+
+    Args:
+        query: Which query to put the margin on.
+
+    Returns:
+        The document.
+    """
+    document = _document(
+        {
+            f"{query}/firepanda": {"ok": True, "median_s": 0.01},
+            f"{query}/duckdb": {"ok": True, "median_s": 4.0},
+        }
+    )
+    document["suite"] = "clickbench"
+    return document
+
+
+def test_a_margin_on_a_query_with_a_weaker_answer_check_says_so():
+    """q31's answer is any ten of 69,354 tied groups, so the check behind a 400x
+    margin on it is the row count and the columns rather than the values. That is
+    exactly the case where an engine that materialized less would not be caught."""
+    concerns = check_sweep.review(_clickbench("q31"))
+    margin = [c for c in concerns if "400x faster" in c]
+    assert len(margin) == 1
+    assert "the weaker one" in margin[0]
+    assert "nearly unique" in margin[0]
+
+
+def test_a_margin_on_a_query_with_a_full_answer_check_says_nothing_extra():
+    """q0 is compared on its values, so there is nothing further to warn about and
+    a warning on every row is a warning nobody reads."""
+    concerns = check_sweep.review(_clickbench("q0"))
+    margin = [c for c in concerns if "400x faster" in c]
+    assert len(margin) == 1
+    assert "the weaker one" not in margin[0]
+
+
+def test_the_sweep_check_counts_the_whole_clickbench_suite():
+    """Coverage is measured against 43, so running ten of them is a claim about ten
+    queries and has to be said where the number appears."""
+    document = _clickbench("q0")
+    concerns = check_sweep.review(document)
+    assert any("ran 1 of 43 clickbench queries" in c for c in concerns)

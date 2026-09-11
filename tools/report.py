@@ -309,6 +309,94 @@ def headline(document: dict, engines: list[str]) -> str:
     )
 
 
+# The full ClickBench size, and the only one a published number is comparable to.
+# The other two exist because a suite that can only be run on a machine with a
+# spare hundred gigabytes gets run four times a year.
+CLICKBENCH_SIZE = "100M"
+
+
+def clickbench_methodology(document: dict) -> list[str]:
+    """The five ways our ClickBench numbers differ from the published table.
+
+    Somebody is going to put a number from this report next to a number from
+    ClickHouse's published table, and the difference between the two is partly the
+    engine and partly this list. A reader who cannot see the list cannot do that
+    comparison correctly, so it goes where the numbers are rather than in a commit
+    message or a README nobody opened.
+
+    Args:
+        document: The result document.
+
+    Returns:
+        The markdown lines.
+    """
+    lines = ["### How this differs from published ClickBench", ""]
+    lines.append(
+        "These are not published ClickBench results and they are not submitted to "
+        "the ClickBench table. They are the published 43 statements, run by this "
+        "harness, under this harness's rules, and those rules differ from "
+        "ClickBench's in five ways. Every one of the five is deliberate and none of "
+        "them makes a number here better than it is."
+    )
+    lines.append("")
+    runs = document["runs"]
+    lines.append(
+        f"- **The statistic.** ClickBench reports the minimum of three runs. This "
+        f"reports the median of {runs} run{'' if runs == 1 else 's'} with the "
+        f"interquartile range in the result file. A minimum is the cleanest run the "
+        f"machine gave you and a median with its spread is a measurement. They are "
+        f"not the same number."
+    )
+    lines.append(
+        "- **The cache.** ClickBench runs each query three times and publishes cold, "
+        "warm and hot separately. This runs warm. Cold cache behaviour is measured "
+        "by the ingestion suite, with the page cache dropped between runs, because "
+        "mixing it into a query suite makes every number in it partly a measurement "
+        "of the filesystem."
+    )
+    lines.append(
+        "- **Load time and data size are missing.** Both are real parts of the "
+        "published table and this harness has never measured either, for any suite. "
+        "The column is absent rather than empty, so nobody reads it as instant."
+    )
+    lines.append(
+        "- **The machine.** The published table is one machine type, c6a.4xlarge. "
+        "This is not that machine, and the machine that produced this file is named "
+        "at the top of it. Only the ratio between two engines in the same table "
+        "transfers between machines."
+    )
+    if document["size"] != CLICKBENCH_SIZE:
+        lines.append(
+            f"- **The size.** This file is {document['size']} and ClickBench is "
+            f"{CLICKBENCH_SIZE}, the full hits table of 99,997,497 rows. A partial "
+            f"size exists here for CI and for machines that cannot hold the whole "
+            f"table, and a number taken on one is not comparable to a published one."
+        )
+    else:
+        lines.append(
+            f"- **The size.** This file is {CLICKBENCH_SIZE}, which is the full "
+            f"table. The 1M and 10M sizes this harness also runs are not ClickBench "
+            f"and are labelled where they appear."
+        )
+    lines.append("")
+    lines.append(
+        "One more difference is not about the harness at all. ClickHouse's published "
+        "entry answers `COUNT(DISTINCT UserID)` with `uniq`, a HyperLogLog estimate. "
+        "Every engine here counts exactly, on q3, q4, q7, q8, q9, q10, q12 and q22, "
+        "and none of them reaches for the approximate spelling its library also "
+        "offers. An exact count is more work than an estimate, so this makes our "
+        "numbers on those eight worse rather than better, and it is the difference "
+        "most likely to be misread."
+    )
+    lines.append("")
+    lines.append(
+        "Submitting a firepanda entry upstream is the right end state and it needs a "
+        "firepanda that reads Parquet on its own and runs all 43. Not yet."
+    )
+    lines.append("")
+    return lines
+
+
 def made_of(suite: str) -> list[str]:
     """The operations inside each query, and which of them the cost matrix measures.
 
@@ -393,7 +481,12 @@ def render(document: dict, path: Path) -> str:
     machine = document.get("machine", {})
     lines: list[str] = []
 
-    lines.append(f"## {suite} at {document['size']}, io mode {document.get('io', 'memory')}")
+    # The size goes in the heading rather than in a note under the table, because a
+    # partial ClickBench size is a different workload from ClickBench and a reader
+    # who scrolls to the numbers and no further has to see that.
+    partial = suite == "clickbench" and document["size"] != CLICKBENCH_SIZE
+    label = ", a partial size and not ClickBench" if partial else ""
+    lines.append(f"## {suite} at {document['size']}{label}, io mode {document.get('io', 'memory')}")
     lines.append("")
     cores = machine.get("physical_cores") or machine.get("logical_cores") or "?"
     lines.append(
@@ -433,6 +526,17 @@ def render(document: dict, path: Path) -> str:
             "the columns the query does not name. pandas has no lazy scan and "
             "reads every column either way. A scan number and a memory number "
             "for the same query are not the same measurement."
+        )
+        lines.append("")
+
+    if suite == "clickbench":
+        lines.extend(clickbench_methodology(document))
+
+    if partial:
+        lines.append(
+            f"Every row below is {document['size']} of the hits table. ClickBench is "
+            f"the whole {CLICKBENCH_SIZE}, and these numbers are not comparable to a "
+            f"published one."
         )
         lines.append("")
 
