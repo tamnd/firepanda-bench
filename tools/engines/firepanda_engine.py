@@ -26,13 +26,14 @@ is CSV, firepanda opens the same file as everybody else, and nothing about the
 comparison depends on two generators agreeing.
 
 That works for db-benchmark, whose data is generated. It does not work for TPC-H,
-whose data comes from dbgen: there is no seed to reproduce. So TPC-H is run the
-only other honest way, which is to read the same Parquet files everybody else
-reads, through DuckDB, before the clock starts. That is exactly what polars and
-pandas do under `--io memory`, where the whole table is loaded eagerly in `load`
-and the query is timed on frames that are already in memory. It is not what
-happens under `--io scan`, where a native reader is most of the answer, and
-firepanda is reported as unable to run that mode until it decodes Parquet itself.
+whose data comes from dbgen, and it does not work for ClickBench, whose data is a
+recorded web log: neither has a seed to reproduce. So both are run the only other
+honest way, which is to read the same Parquet files everybody else reads, through
+DuckDB, before the clock starts. That is exactly what polars and pandas do under
+`--io memory`, where the whole table is loaded eagerly in `load` and the query is
+timed on frames that are already in memory. It is not what happens under `--io
+scan`, where a native reader is most of the answer, and firepanda is reported as
+unable to run that mode until it decodes Parquet itself.
 
 There is a second TPC-H caveat and it runs the other way. The money columns are
 DECIMAL(15,2) in the specification, DuckDB and polars carry decimals through, and
@@ -123,6 +124,15 @@ INGESTION_SUPPORTED = (
     "csv_quoted",
     "csv_nulls",
 )
+
+# The ClickBench list is not written down here. The driver knows which of the 43
+# it runs and what it says about the ones it does not, and `--list=clickbench`
+# asks it, which is one list instead of two that have to be kept in step. The
+# tuples above are the older shape and they have gone stale twice: a query landed
+# in the driver and the table went on reporting it as missing, because the list
+# the harness reads was somewhere else. There is nothing to edit here when q28
+# gets its regex engine.
+_CLICKBENCH_SUPPORT: dict[str, tuple[tuple[str, ...], dict[str, str]]] = {}
 
 
 def firepanda_home() -> Path:
@@ -308,6 +318,42 @@ def build(force: bool = False) -> Path:
     return binary
 
 
+def clickbench_support(binary: Path) -> tuple[tuple[str, ...], dict[str, str]]:
+    """Asks the driver which ClickBench queries it runs and why it refuses any.
+
+    Cached per binary, because the answer cannot change while the binary does
+    not and the alternative is a process launch before every one of 43 queries.
+
+    Args:
+        binary: The built driver.
+
+    Returns:
+        The supported query names, and a reason per refused one. A driver that
+        cannot be asked comes back as supporting nothing, and the caller reports
+        that against the query rather than raising.
+    """
+    key = str(binary)
+    if key in _CLICKBENCH_SUPPORT:
+        return _CLICKBENCH_SUPPORT[key]
+    supported: tuple[str, ...] = ()
+    unsupported: dict[str, str] = {}
+    try:
+        completed = subprocess.run(
+            [str(binary), "--list=clickbench"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        listed = json.loads(completed.stdout.strip().splitlines()[-1])
+        supported = tuple(listed.get("supported", ()))
+        unsupported = dict(listed.get("unsupported", {}))
+    except (OSError, ValueError, IndexError, subprocess.TimeoutExpired):
+        pass
+    _CLICKBENCH_SUPPORT[key] = (supported, unsupported)
+    return supported, unsupported
+
+
 def measure(
     query: str,
     rows: int,
@@ -353,6 +399,19 @@ def measure(
             return {"ok": False, "note": f"firepanda does not implement {query}"}
         if not paths:
             return {"ok": False, "note": "the harness passed no tables to read"}
+    elif suite == "clickbench":
+        if io != "memory":
+            return {
+                "ok": False,
+                "note": (
+                    f"firepanda cannot run ClickBench with --io {io}: it decodes "
+                    "Parquet only by handing the file to DuckDB, which is an "
+                    "engine in this table, so the reader being measured would "
+                    "not be its own"
+                ),
+            }
+        if not paths:
+            return {"ok": False, "note": "the harness passed no table to read"}
     elif suite != "db-benchmark":
         return {
             "ok": False,
@@ -369,6 +428,16 @@ def measure(
     except SystemExit as exc:
         return {"ok": False, "note": str(exc)}
 
+    # After the build, because the driver is what holds this list and it has to
+    # exist before it can be asked.
+    if suite == "clickbench":
+        supported, unsupported = clickbench_support(binary)
+        if query not in supported:
+            return {
+                "ok": False,
+                "note": unsupported.get(query, f"firepanda does not implement {query}"),
+            }
+
     command = [
         str(binary),
         f"--query={query}",
@@ -376,8 +445,11 @@ def measure(
         f"--runs={runs}",
         f"--suite={suite}",
     ]
-    if suite == "ingestion":
-        # One file per ingestion query, so there is exactly one path to pass.
+    if suite == "ingestion" or suite == "clickbench":
+        # One path to pass either way. For ingestion it is one file per query,
+        # and for ClickBench it is the partition glob, which is what the harness
+        # hands every engine for that suite and what DuckDB expands on the way
+        # in.
         command.append(f"--path={next(iter(paths.values()))}")
     elif suite == "tpch":
         # One flag per table the query reads. A table it does not read gets no
