@@ -4,6 +4,20 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+## v0.3.6
+
+A patch. Nothing here changes what a published number means and no result file a reader has ever seen reads differently after it. What changed is that the scheduled run produces the files the front page says it produces.
+
+### The ingestion suite runs on the schedule
+
+The ingestion suite has been wired up and runnable for a while and was never in the benchmark matrix, so there has never been a scheduled ingestion result file. The front page describes a full run as fourteen files and counts ingestion in that number, and the run was producing twelve. It is in the matrix now, with its size set in a step rather than in the matrix, so the scheduled size and the harness default stay one number, which is the arrangement ClickBench already uses.
+
+The io input is overridden for this job. The harness refuses a memory mode on this suite and is right to: handing every engine the same Arrow table on a suite that times the CSV reader would mean reading the file before timing the read. That refusal belongs at a terminal and not here, since memory is what the dispatch form defaults to, so a scheduled run would fail one job in four every week to say something the suite already knows. The job forces scan and writes a notice saying it did.
+
+Measured before turning it on. At 10M the four files are about 1.5 GB of CSV, generated in roughly two and a half minutes, and at 1M with three engines and three runs the benchmark takes 47 seconds, which scales to well inside the job timeout.
+
+Closes #69.
+
 ## v0.3.5
 
 A patch. Nothing here changes what a published number means and no result file a reader has ever seen reads differently after it. What changed is what a reader sees when they arrive: the READMEs now carry the numbers, and ClickBench is on the front page.
