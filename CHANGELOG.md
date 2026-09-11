@@ -4,6 +4,20 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+## v0.4.1
+
+A patch. Nothing here changes what a published number means, and one number got a lot better.
+
+### q23 stopped building a frame it was going to throw away
+
+firepanda's worst ClickBench query was the one that asks for the table rather than a reduction of it. A pattern match over `URL` keeps ninety five rows out of a million at 1M and ten of those are the answer, and the driver was building the filtered frame first, which means gathering 105 columns a million rows at a time to read ten rows out of the result.
+
+tamnd/firepanda#582 added `DataFrame.filter_sort_limit`, which carries positions through the filter and the sort and gathers the wide columns once at the rows the limit left. The driver calls that now. At 1M over three runs the query goes from 0.053 s to 0.008 s, which is level with Polars and four times ahead of DuckDB.
+
+All 43 queries still agree, all three engines, same digests.
+
+In #76.
+
 ## v0.4.0
 
 A minor bump, and the reason is the agreement check rather than the suite. A ClickBench result file written before this reads differently after it, because the check that decides whether four engines got the same answer was reading a third of the suite's columns as zero.
