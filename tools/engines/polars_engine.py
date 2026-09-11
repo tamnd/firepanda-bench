@@ -81,7 +81,7 @@ def load_clickbench(pattern: str, io: str) -> pl.LazyFrame:
     """
     files = clickbench.partitions(pattern)
     if io == "scan":
-        return pl.scan_parquet(files).with_columns(
+        frame = pl.scan_parquet(files).with_columns(
             pl.col(pl.Binary).cast(pl.String),
             pl.col(clickbench.DATE_COLUMN).cast(pl.Int32).cast(pl.Date),
             *[
@@ -89,7 +89,13 @@ def load_clickbench(pattern: str, io: str) -> pl.LazyFrame:
                 for name in clickbench.TIMESTAMP_COLUMNS
             ],
         )
-    return pl.from_arrow(clickbench.retype(pq.read_table(files))).lazy()
+    else:
+        frame = pl.from_arrow(clickbench.retype(pq.read_table(files))).lazy()
+    # The lazy schema, which costs a plan walk and not a read, so the check is as
+    # cheap under scan as it is under memory.
+    schema = frame.collect_schema()
+    clickbench.check_text({name: kind == pl.String for name, kind in schema.items()}, "polars")
+    return frame
 
 
 def finish(frame: pl.DataFrame) -> pa.Table:

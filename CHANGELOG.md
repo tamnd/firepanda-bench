@@ -2,6 +2,36 @@
 
 Versions here track the harness, not the engines it measures and not firepanda itself. A change that alters what a published number means gets a minor bump, because a reader comparing two result files needs to know whether the measurement changed under them.
 
+## Unreleased
+
+### Five ways a ClickBench port is quietly wrong
+
+`suites/clickbench/README.md` writes down the five traps in this suite, what each one does to a number if you fall into it, and which of them this repository now catches by itself. TPC-H comes with the answers the TPC publishes and `pixi run validate-tpch` checks all 66 implementations against them cell by cell, which found two real problems before anything was published. ClickBench publishes no answers at all, so this suite starts without the strongest check the repository has, and the traps have to be found by reading the queries rather than by running them.
+
+Each of the five produces a plausible table quickly, which is the part worth stating. A port that crashes gets fixed the same day. A port that returns ten rows of the right shape with the wrong rows in them goes into a chart.
+
+Two of the five are decisions a port makes once and lives with, and they are written up rather than tested: bytes against characters in q27 and q28, which is the same two percent both ports already have a test for, and exact against approximate distinct counts, which matters only to somebody comparing our q3, q4, q7, q8, q9, q10, q12 and q22 against a published entry that uses `uniq`. The other three could be undone by a future change with nothing going red, so they are now checked.
+
+### Every loader has to prove the text columns are text
+
+The text columns in `hits.parquet` are `BYTE_ARRAY` with no string logical type, so every engine reading that file makes its own guess about what they are. Measured rather than assumed: without the conversion six of the 43 fail to bind, which is loud, and another nine answer with bytes where they should answer with text, which is not. The row counts are right, the values are right, and the fingerprint hashes bytes and text through the same function, so the agreement check passes and the table looks finished.
+
+So `clickbench.check_text` takes a mapping of every column a loader ended up with to whether that engine is holding it as text, and all three loaders call it before returning. A load that skipped the conversion stops there instead of producing a number. It judges the columns that are actually present rather than demanding all 28, because the eight row fixture carries 25 of the 105 columns and a check that failed on the fixture would have been turned off within a week.
+
+### The manifest counts nulls per column
+
+Eleven queries filter on `SearchPhrase <> ''` or `URL <> ''` or `MobilePhoneModel <> ''`. In this dataset the empty string is what a missing value looks like and there are no nulls at all, in any of the 105 columns, which is now read out of the Parquet footers rather than believed. A reader that helpfully turned empty strings into nulls would change what those eleven filters mean under three valued logic, and q22's `NOT LIKE` is exactly the shape where that stops being a harmless difference.
+
+`pixi run data clickbench` records a null count per column in the dataset manifest. It comes from the footer statistics, so it costs one metadata read rather than a pass over the data, and a reader that started converting shows up as a changed count in the manifest instead of as a changed answer in a table.
+
+### Thirteen queries are compared on what the SQL determines
+
+Thirty two of the 43 end `ORDER BY something LIMIT 10`, and q17 has no order by at all. An answer is determined only when the ordering expression can tell the last included row apart from the first excluded one, and on this data it frequently cannot. At 1M, q26 has 2 rows tied at the cut, q11 has 3, q22 and q24 have 4, q18 and q30 have 5, q40 has 10, q25 has 19, q39 has 177, q38 has 651, q31 has 69,354 because `WatchID` is nearly unique so almost every group has a count of one, and q32 ties everywhere, which means its answer is any ten rows of the table.
+
+Those thirteen are flagged in `tools/queries.py` with the reason, and both checks read the flag. The fingerprint comparison in `tools/run.py` and the exact check in `tools/verify.py` compare them on their row count, their column names and their column types, all of which the statements do determine, and neither looks at the values. An engine that answered one of them with five rows, or lost a column, or put an integer where everybody else has a date, is still caught.
+
+Both outputs say so. `tools/verify.py` marks those queries as compared on shape alone and lists them at the end, and the report has a section naming them with the reason beside each. Making the ports agree here would mean adding an order by the query does not have and then measuring a different query, so the honest thing is a weaker check that announces itself. The list was measured at 1M and the set depends on the size, since which rows tie at row ten depends on how many rows there are, and #47 is where it gets computed against whichever dataset a run actually used.
+
 ## v0.3.2
 
 Still a patch, and the rule at the top of the file is still why. Two more engines answer the 43 queries, which is most of the work in the suite, and nothing here publishes a number. No result file a reader has ever seen means anything different after this. The minor comes when all four engines have a cell and the report has a place to put them.

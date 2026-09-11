@@ -109,7 +109,12 @@ def load_clickbench(pattern: str) -> dict:
         A mapping with the one table in it.
     """
     table = clickbench.retype(pq.read_table(clickbench.partitions(pattern)))
-    return {"hits": table.to_pandas(types_mapper=pd.ArrowDtype)}
+    frame = table.to_pandas(types_mapper=pd.ArrowDtype)
+    clickbench.check_text(
+        {name: str(kind) == "string[pyarrow]" for name, kind in frame.dtypes.items()},
+        "pandas",
+    )
+    return {"hits": frame}
 
 
 def finish(frame: pd.DataFrame) -> pa.Table:

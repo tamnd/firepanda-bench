@@ -84,6 +84,50 @@ PARTITION_GLOB = "{table}_*.parquet"
 DATE_COLUMN = "EventDate"
 TIMESTAMP_COLUMNS = ("EventTime", "ClientEventTime", "LocalEventTime")
 
+# The 28 columns the file stores as BYTE_ARRAY and the published schema calls
+# VARCHAR, listed rather than derived so that an engine can be asked whether it
+# ended up with text without being asked what the file said.
+#
+# This is the first of the five traps in `suites/clickbench/README.md` and the
+# reason it is worth a list is that getting it wrong is quiet. Six of the 43
+# statements fail to bind against binary, which is loud, and another nine answer
+# with bytes where they should answer with text, which is not: the row counts are
+# right, the values are right, and the cross engine fingerprint hashes bytes and
+# text through the same function, so the agreement check passes and the table
+# looks finished. So every engine's loader hands its own idea of which columns are
+# text to `check_text` and the run stops there rather than at a number nobody can
+# see is wrong.
+TEXT_COLUMNS = (
+    "Title",
+    "URL",
+    "Referer",
+    "FlashMinor2",
+    "UserAgentMinor",
+    "MobilePhoneModel",
+    "Params",
+    "SearchPhrase",
+    "PageCharset",
+    "OriginalURL",
+    "HitColor",
+    "BrowserLanguage",
+    "BrowserCountry",
+    "SocialNetwork",
+    "SocialAction",
+    "SocialSourcePage",
+    "ParamOrderID",
+    "ParamCurrency",
+    "OpenstatServiceName",
+    "OpenstatCampaignID",
+    "OpenstatAdID",
+    "OpenstatSourceID",
+    "UTMSource",
+    "UTMMedium",
+    "UTMCampaign",
+    "UTMContent",
+    "UTMTerm",
+    "FromTag",
+)
+
 # The published row count of the whole dataset, for checking that a full download
 # is actually the full dataset. Partial sizes have no published count, so their
 # row counts are measured and recorded rather than checked.
@@ -334,6 +378,76 @@ def retype(table):
     return table
 
 
+def check_text(kinds: dict, engine: str) -> None:
+    """Refuses a load that did not end up with text in the text columns.
+
+    Called by every engine's ClickBench loader with one entry per column it
+    loaded, saying whether that engine is holding the column as text. It is the
+    cheapest test in this repository and it stands where the failure it catches is
+    otherwise invisible.
+
+    Judged against the columns that are actually there rather than against all 28,
+    so the eight row fixture the port tests run on, which carries 25 of the 105
+    columns, is checked by the same function the real table is.
+
+    Args:
+        kinds: Column name to whether the engine holds it as text.
+        engine: Which engine is asking, so the message says whose load is wrong.
+
+    Raises:
+        SystemExit: If any text column arrived as something else.
+    """
+    wrong = [name for name in TEXT_COLUMNS if name in kinds and not kinds[name]]
+    if not wrong:
+        return
+    raise SystemExit(
+        f"{engine} loaded the hits table with {len(wrong)} of the text columns "
+        f"still unconverted: {', '.join(wrong[:5])}. The file stores them as "
+        "BYTE_ARRAY with no logical type, ClickBench's own loader converts them, "
+        "and an engine that skips it answers nine of the 43 with bytes that the "
+        "cross engine fingerprint cannot tell from text."
+    )
+
+
+def null_counts(path: Path) -> dict:
+    """Returns how many nulls each column of a partition holds.
+
+    Out of the Parquet footer's per column statistics rather than out of a read,
+    so this costs the same seek `describe` already pays and not a pass over twelve
+    gigabytes.
+
+    It is recorded because of the third trap in `suites/clickbench/README.md`. In
+    this dataset the empty string is what a missing value looks like and there are
+    no nulls at all, and eleven queries filter on `<> ''`. A reader that started
+    converting empty strings to nulls would change what those filters mean under
+    three valued logic, and the first place it would show up is here, as a column
+    that used to have no nulls and now has millions.
+
+    Args:
+        path: The partition.
+
+    Returns:
+        The count per column name, for every column the footer carries statistics
+        for. A column whose statistics do not record a null count is left out
+        rather than reported as zero.
+    """
+    import pyarrow.parquet as pq
+
+    metadata = pq.ParquetFile(path).metadata
+    counts: dict[str, int] = {}
+    for index in range(metadata.num_row_groups):
+        group = metadata.row_group(index)
+        for position in range(group.num_columns):
+            column = group.column(position)
+            statistics = column.statistics
+            if statistics is None or not statistics.has_null_count:
+                continue
+            counts[column.path_in_schema] = (
+                counts.get(column.path_in_schema, 0) + statistics.null_count
+            )
+    return counts
+
+
 def check_room(needed: int, out: Path) -> None:
     """Refuses before the first byte if the disk cannot hold the files.
 
@@ -446,6 +560,15 @@ def build(size: str, root: Path, force: bool, skip_digest: bool = False) -> Path
         entry["sha256"] = digest(path)
         files[name] = entry
 
+    # Summed across the partitions rather than kept per file, because 105 columns
+    # times a hundred partitions is ten thousand entries of a number that is the
+    # same everywhere, and what anybody would ever ask this manifest is whether the
+    # dataset has nulls at all.
+    nulls: dict[str, int] = {}
+    for index in range(count):
+        for column, value in null_counts(out / f"hits_{index}.parquet").items():
+            nulls[column] = nulls.get(column, 0) + value
+
     rows = sum(entry["rows"] for entry in files.values())
     if count == SIZES["100M"] and rows != FULL_ROWS:
         raise SystemExit(
@@ -463,6 +586,12 @@ def build(size: str, root: Path, force: bool, skip_digest: bool = False) -> Path
         "source": BASE_URL,
         "generator": "none, this dataset is downloaded and cannot be regenerated",
         "is_published_size": size == "100M",
+        # One number per column, from the footers. Every one of them is zero on
+        # this dataset, which is the point: the empty string is what a missing
+        # value looks like here, eleven queries filter on `<> ''`, and a reader
+        # that started turning empty strings into nulls would change what those
+        # filters mean. This is where that shows up.
+        "nulls": nulls,
         "downloaded_s": round(time.perf_counter() - started, 3),
         "downloaded_bytes": fetched,
         "files": files,

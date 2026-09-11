@@ -617,6 +617,27 @@ def render(document: dict, path: Path) -> str:
             else:
                 lines.append(f"- {', '.join(where)}: {note}")
 
+    weak = [
+        (query.name, query.undetermined)
+        for query in query_registry.for_suite(suite)
+        if query.undetermined and document["results"].get(f"{query.name}/{engines[0]}")
+    ]
+    if weak:
+        lines.append("")
+        lines.append("### Rows where the check behind the number is weaker")
+        lines.append("")
+        lines.append(
+            "These queries do not determine which rows come back, so two engines "
+            "returning different rows are both right and the answers are compared "
+            "on their row count and their columns rather than on their values. The "
+            "timings are as good as any other row in the table. The agreement "
+            "behind them is not, and a reader should know which rows those are "
+            "rather than assume the whole suite is checked the same way."
+        )
+        lines.append("")
+        for name, reason in weak:
+            lines.append(f"- {name}: {reason}")
+
     if disagreed:
         lines.append("")
         lines.append("### Queries the engines did not agree on")

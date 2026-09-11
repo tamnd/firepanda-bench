@@ -97,6 +97,10 @@ class Query:
     suite: str = "db-benchmark"
     """Which suite the query belongs to."""
 
+    undetermined: str = ""
+    """Why the statement does not determine which rows come back, or empty when it
+    does. Set for thirteen ClickBench queries and for nothing else."""
+
 
 GROUPBY = (
     Query(
@@ -533,6 +537,49 @@ NARROW_SCHEMA = (
 )
 
 
+# The queries whose answers the published statements do not determine, and how
+# many rows tie at the boundary the limit cuts on, measured at 1M.
+#
+# This is the fourth of the five traps in `suites/clickbench/README.md` and it is
+# the one that cannot be fixed by making the ports agree, because agreeing would
+# mean adding an order by the query does not have and then measuring a different
+# query. Every one of these ends `ORDER BY <something> LIMIT 10`, except q17 which
+# never sorts at all, and the answer is determined only when the ordering
+# expression can tell the last included row apart from the first excluded one. On
+# this data it often cannot: `WatchID` is nearly unique so almost every group in
+# q31 has a count of one, and q32 takes any ten rows of the table.
+#
+# The counts come from ranking the whole answer by its own ordering expression and
+# counting the rows sharing the boundary rank, which is a fact about the data and
+# so has to be measured rather than reasoned about. They were measured at 1M. The
+# set is a function of the size, since which rows tie at row ten depends on how
+# many rows there are, and #47 is where it gets computed against whichever dataset
+# a run actually used. Until then this list is the 1M answer and a lower bound
+# everywhere else, which is the right way round: a query that is treated as
+# determined when it is not produces a spurious disagreement, and one treated as
+# undetermined when it is determined loses a check on ten rows.
+#
+# What stays checkable in all thirteen is the row count, the column set and the
+# types. An engine that answered with five rows, or with the wrong columns, is
+# still caught. That is weaker than the check the other thirty get and a great
+# deal stronger than skipping them.
+CLICKBENCH_UNDETERMINED = {
+    "q11": "3 groups tie at the row the limit cuts on",
+    "q17": "no ORDER BY at all, so any ten groups are a correct answer",
+    "q18": "5 groups tie at the row the limit cuts on",
+    "q22": "4 groups tie at the row the limit cuts on",
+    "q24": "4 rows tie at the row the limit cuts on",
+    "q25": "19 rows tie at the row the limit cuts on",
+    "q26": "2 rows tie at the row the limit cuts on",
+    "q30": "5 groups tie at the row the limit cuts on",
+    "q31": "69,354 groups tie, since WatchID is nearly unique and almost every count is one",
+    "q32": "every row ties, so the answer is any ten rows of the table",
+    "q38": "651 groups tie at the row the limit cuts on",
+    "q39": "177 groups tie at the row the limit cuts on",
+    "q40": "10 groups tie at the row the limit cuts on",
+}
+
+
 def _cb(name: str, description: str, why: str, keys: tuple[str, ...] = ()) -> Query:
     """Builds one ClickBench entry.
 
@@ -545,7 +592,16 @@ def _cb(name: str, description: str, why: str, keys: tuple[str, ...] = ()) -> Qu
     Returns:
         The query.
     """
-    return Query(name, "clickbench", description, why, keys, ("hits",), suite="clickbench")
+    return Query(
+        name,
+        "clickbench",
+        description,
+        why,
+        keys,
+        ("hits",),
+        suite="clickbench",
+        undetermined=CLICKBENCH_UNDETERMINED.get(name, ""),
+    )
 
 
 # ClickBench's 43, in ClickBench's order and under ClickBench's names.
@@ -1001,6 +1057,29 @@ def lookup(suite: str, name: str) -> Query:
         if query.name == name:
             return query
     raise SystemExit(f"{suite} has no query '{name}'")
+
+
+def undetermined(suite: str, name: str) -> str:
+    """Returns why a query's answer is not determined by its statement, if it is not.
+
+    A lookup rather than a dictionary the callers reach into, because the check
+    that has to honour this lives in three files and a suite that never has an
+    undetermined query should not have to know the registry exists.
+
+    Args:
+        suite: The suite name.
+        name: The query name.
+
+    Returns:
+        The reason, or empty for a query whose answer is determined and for a name
+        this registry has never heard of.
+    """
+    if suite not in SUITES:
+        return ""
+    for query in SUITES[suite]:
+        if query.name == name:
+            return query.undetermined
+    return ""
 
 
 def select(names: str, suite: str = "db-benchmark") -> list[Query]:

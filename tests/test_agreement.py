@@ -147,7 +147,7 @@ def test_agreement_ignores_the_pairings_that_failed():
     """A skipped query is not a disagreement, it is an absence."""
     ran = answer("polars", 1, {"v": 1.0})
     skipped = metrics.Measurement(engine="firepanda", query="q1", ok=False, note="no reader")
-    report = run.agreement([ran, skipped])
+    report = run.agreement([ran, skipped], "db-benchmark")
     assert report["q1"]["agreed"]
     assert list(report["q1"]["by_engine"]) == ["polars"]
 
@@ -173,6 +173,7 @@ def test_agreement_reports_the_query_that_disagreed():
             answer("duckdb", 1, {"v": 1.0}),
             answer("polars", 1, {"v": 1.0}),
             answer("pandas", 1, {"v": 2.0}),
-        ]
+        ],
+        "db-benchmark",
     )
     assert not report["q1"]["agreed"]
