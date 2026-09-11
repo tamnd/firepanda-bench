@@ -10,6 +10,46 @@ No run has been folded in here yet. `pixi run suite-readme` writes this block fr
 
 <!-- suite-readme: end, sha256 e9404828c2ef2a54 -->
 
+## What this suite is for, against the three that were already here
+
+db-benchmark isolates group by and join on generated data with cardinalities somebody chose. TPC-H stresses the optimizer, and the wins in it come from pushing a projection or a predicate down rather than from a kernel being fast. Ingestion measures the reader and nothing else.
+
+ClickBench is the one with real data in it. The cardinalities are whatever a web analytics table has, which means `UserID` is nearly unique and `CounterID` has a handful of values that cover most of the rows, and no generator would have produced either. The empty string stands in for null in all 105 columns. The table is wide and most queries touch three columns out of the 105, so an engine that reads a column it does not need pays for it here and nowhere else in this repository.
+
+It is also the only suite here with no joins at all. Every query is a scan, a filter, a group by, a sort and a limit over one table, which means a slow number has nowhere to hide: there is no join order to blame and no second table to have been the wrong size.
+
+## Where the data comes from, and why it cannot be regenerated
+
+Every other suite here can be reproduced from a seed or from `dbgen`, so a run is checkable by making the data again. This one is downloaded, from the bucket ClickHouse publishes, one partition at a time. There is no generator, and there will not be one, because the whole value of it is that it is a real table rather than a plausible one.
+
+What stands in for a generator is the manifest. `pixi run data --suite clickbench` writes a digest, a byte count, a row count and a per column null count for every partition it fetched, and a later run rehashes what is on disk against that manifest and refetches anything that does not match. That is what makes a cached copy safe to trust: the scheduled run restores a cache keyed on the size, and a partial or corrupted restore costs a download rather than producing a wrong number.
+
+Three sizes exist. 100M is the published one, 99,997,497 rows, and the only size a number here is comparable to a number in ClickHouse's table. 10M is what the scheduled run uses, because 100M is a twelve gigabyte download onto a runner with fourteen gigabytes of disk. 1M is what CI and a laptop can finish. The report labels anything that is not 100M as partial, in the heading and again immediately above the table, because a partial size that is only marked in a footnote is a partial size nobody noticed.
+
+## Which engines run it
+
+DuckDB, pandas and Polars run all 43. DuckDB runs the published SQL unmodified and the other two are ports, each written once against that text and compared against DuckDB's answer per query.
+
+firepanda runs none of the 43 and says so once rather than 43 times: it does not have a driver for this suite yet. That is issue #45 in this repository, and it is behind a firepanda that can read Parquet without handing the file to DuckDB, because DuckDB is one of the four engines in this table and an engine whose reader is another engine in the table is not being measured. When the driver lands it starts as a column of explicit refusals with a reason on each, the way TPC-H did, rather than as a missing column.
+
+cuDF and MojoFrame are not in this suite. cuDF arrives with the GPU runner and MojoFrame has no ClickBench port published.
+
+## The two io modes, and what 100M costs
+
+In `memory` mode the harness materializes the hits table to Arrow before the timer starts and hands every engine the same one, so nobody is timed on their Parquet reader. In `scan` mode each engine opens the Parquet itself and Polars and DuckDB push the projection into the file, which is how anybody actually uses them and is the mode the published table is closer to.
+
+The gap between the two is larger here than anywhere else in this repository, because a query naming three columns out of 105 reads three of them in scan mode and all of them in memory mode. The site draws that gap as a chart of one engine's scan time over its own memory time, which is how much of a scan run went on opening the file rather than on answering the query.
+
+At 100M, memory mode does not fit. The hits table in Arrow is larger than the RAM on either machine, so that size is scan only, and a 100M scan number cannot be compared against a 10M memory number for two reasons rather than one. Where only one mode ran, the report says which.
+
+## Three queries worth naming
+
+**q31 and q32 group by a key that is nearly unique.** `WatchID` at a hundred million rows means almost every group has a count of one, and a group by kernel that is fine on a hundred groups and fine on a million can still fall over here. This is the reason firepanda has its own hash table rather than Mojo's dictionary, and it is the only place in this repository where that claim is tested at this scale. They are also the two queries whose answers the statements determine least, which is the fourth trap below: at 1M, q31 has 69,354 rows tied at the cut and q32 has all of them.
+
+**q23 is `SELECT *` behind a LIKE, a sort and a limit of ten.** All 105 columns come back and ten rows do, which is the query that finds an engine materializing columns before it knows which rows survive. It is also the one query in the suite where projection pushdown buys nothing in scan mode, because there is nothing to push down, so it is the fairest single row in the table for comparing a reader against a reader.
+
+**q17 is the only query with a limit and no ORDER BY.** It is `GROUP BY UserID, SearchPhrase LIMIT 10`, so which ten rows come back is whatever the engine finished first, and it is compared on its shape rather than its values for that reason.
+
 ## Checking answers for a suite that publishes none
 
 TPC-H has the validation output the TPC publishes with the specification, and `pixi run validate-tpch` checks all 66 implementations against it cell by cell. That check found two real problems before any number here was published. ClickBench publishes no answers, so this suite starts without the strongest check the repository has.
@@ -99,3 +139,9 @@ Submitting a firepanda entry upstream to ClickHouse/ClickBench is the right end 
 `suites/clickbench/queries.sql` is a byte for byte copy of what ClickHouse/ClickBench commits at `duckdb/queries.sql`, and nothing in this repository knows what any of them say. DuckDB runs each line with the semicolon removed, which is checked by a test, and the file's digest is pinned by another. The pandas and Polars ports were each written against that text and are compared against DuckDB's answer per query.
 
 They are numbered q0 through q42 because ClickBench numbers from zero, so our q22 and a published q22 are the same query.
+
+## License
+
+The queries are from [ClickHouse/ClickBench](https://github.com/ClickHouse/ClickBench), which is Apache-2.0, and `queries.sql` is a byte for byte copy of the file that repository commits at `duckdb/queries.sql`. Neither the queries nor the dataset is ours. The hits table is published by ClickHouse under its own terms, from its own bucket, and this repository downloads it rather than redistributing it.
+
+These are not published ClickBench results and they are not submitted to the ClickBench table. Every way our measurements differ from the published methodology is listed above and repeated in the report, so anybody putting one of our numbers next to one of theirs sees that list first.
