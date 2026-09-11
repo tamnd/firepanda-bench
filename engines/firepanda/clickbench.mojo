@@ -1013,6 +1013,12 @@ def q23(hits: DataFrame) raises -> DataFrame:
     reduction of it, and the width is the point: the filter keeps a small number
     of rows and every one of the 105 columns has to come with them.
 
+    `filter_sort_limit` rather than a filter and then a limit, because the
+    filtered frame in the middle is the whole cost of this query. Ninety five
+    rows out of a million survive at 1M and ten of those are the answer, so
+    building the filtered frame means gathering 105 columns a million rows at a
+    time to read ten rows out of the result.
+
     Args:
         hits: The table.
 
@@ -1022,8 +1028,13 @@ def q23(hits: DataFrame) raises -> DataFrame:
     Raises:
         Error: As the operations do.
     """
-    var kept = hits.filter(_contains(hits, "URL", String("google")))
-    return _top(kept^, ["EventTime"], [False], 10)
+    return hits.filter_sort_limit(
+        _contains(hits, "URL", String("google")),
+        ["EventTime"],
+        [False],
+        [False],
+        10,
+    )
 
 
 def q24(hits: DataFrame) raises -> DataFrame:
