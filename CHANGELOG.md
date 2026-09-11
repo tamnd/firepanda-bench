@@ -4,6 +4,25 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### The ClickBench operation declarations are read off the port rather than off the SQL
+
+Every query in this repository declares what it is made of in pandas names, so a reader who sees a query lose can look the operation up in the firepanda-compat cost matrix rather than guessing which part of it was slow. The ClickBench declarations were written before the pandas port existed, off the published SQL, with a comment saying they would be re-derived from the port once there was one. There is one now.
+
+Six entries changed, and every one of them is a place where what the SQL reads like and what pandas does are not the same thing. q1 and q20 count matching rows by summing a boolean mask rather than by filtering a frame and taking its length. q28 pulls its capture group out with a replace and a backreference rather than with an extract, because the query replaces the whole string. q34 adds its constant column to the ten rows that survive the limit, so it is q33 exactly, which is the point of the pair. q35 writes its three derived keys with an assignment rather than with `assign`. And the limit is an `iloc` slice on every query that has one except q17, because the port takes a limit and an offset through one helper and that helper slices.
+
+That last one is the difference between five queries pointing at a missing matrix row and 33 doing it.
+
+### Five holes in the cost matrix, filed rather than listed
+
+The point of declaring operations is that the last column of the table is a hole over there with a query attached to it. ClickBench found five: taking rows at an offset, a minimum over a column, an ungrouped distinct count, a conditional expression producing a group key, and reading the minute out of a timestamp. Each is now an issue on firepanda-compat with the queries that run it and a suggested row, rather than a name in a column here.
+
+`str.extract` came off that list, because the port does not call it. The report also stops printing the deliberate exclusions in the same sentence as the holes, so the count of holes is a count of holes.
+
+### An operation can be covered by a row that measures its neighbour
+
+Coverage is keyed by pandas name and the matrix is keyed by row, and a name can carry two rows with different costs. The matrix already has a literal `str.contains` and a regular expression one for that reason. Two ClickBench operations land on the wrong side of it: q27 and q28 need a byte length where the row measures characters, and q28 runs a regular expression with a capture group where the row replaces a literal, which is a per row trip through Python's `re` against a vectorized kernel.
+
+Those are now listed on their own rather than folded into either the covered set or the holes. Counting them as measured would be claiming more than is known and counting them as missing would be wrong.
 ## v0.3.4
 
 A patch. Nothing here changes what a published number means and no result file a reader has ever seen reads differently after it. What changed is whether a reader can read the ClickBench report at all, and whether the suite runs without somebody starting it by hand.

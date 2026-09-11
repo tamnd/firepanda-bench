@@ -30,13 +30,20 @@ in the cost matrix with a query attached to it, which is more useful than a comp
 looking table, and `pixi run operations` prints those separately.
 
 Until ClickBench arrived there was exactly one such name and it was excluded on
-purpose rather than missing. ClickBench added several that are genuinely missing:
+purpose rather than missing. ClickBench added five that are genuinely missing:
 counting distinct values of a whole column, a minimum over one, reading the minute
-out of a timestamp, a conditional expression, pulling a capture group out of a
-regular expression, and taking rows at an offset. The report separates the two
-kinds now, because "the matrix has not measured this yet" and "the matrix will
-never measure this and here is why" are different statements and running them
-together makes the second one look like an excuse for the first.
+out of a timestamp, a conditional expression, and taking rows at an offset. The
+report separates the two kinds, because "the matrix has not measured this yet" and
+"the matrix will never measure this and here is why" are different statements and
+running them together makes the second one look like an excuse for the first.
+
+There is a third kind, which ClickBench is also the first suite to produce. A row
+can exist for an operation and measure a neighbour of it: the matrix counts string
+characters and q27 needs bytes, and it replaces a literal where q28 runs a regular
+expression with a capture group. Those never show up as holes, because coverage is
+keyed by pandas name and the matrix is keyed by row, and a name can have two rows
+with different costs. They are listed on their own rather than folded into either
+list, since a covered count that included them would be claiming more than is known.
 """
 
 from __future__ import annotations
@@ -268,22 +275,36 @@ DECLARED: dict[tuple[str, str], tuple[str, ...]] = {
     ("ingestion", "csv_wide"): ("pandas.read_csv",),
     ("ingestion", "csv_quoted"): ("pandas.read_csv",),
     ("ingestion", "csv_nulls"): ("pandas.read_csv",),
-    # ClickBench, and these are provisional in a way the rest of this table is not.
+    # ClickBench, read off `engines/pandas_clickbench.py` now that the port exists.
+    # The first version of this table was read off the published SQL instead, because
+    # the registry could not land without declarations and the port had not been
+    # written, and the comment here said it would be re-derived. This is that.
     #
-    # Everything above was read off a pandas implementation that already existed.
-    # These were read off the published SQL, because the ClickBench pandas port does
-    # not exist yet and the registry cannot land without declarations: the test that
-    # every query declares something walks the whole registry. So they are a reading
-    # of what the SQL asks for rather than a record of what any code does, and they
-    # get re-derived from `engines/pandas_clickbench.py` once that is written.
+    # Six entries changed and the changes are worth naming, because every one of them
+    # is a place where what the SQL reads like and what pandas does are not the same
+    # thing. q1 and q20 count matching rows by summing a boolean mask rather than by
+    # filtering a frame and taking its length, so they are a `Series.sum` and not a
+    # filter. q28 pulls its capture group out with `str.replace` and a backreference
+    # rather than with `str.extract`, because the query replaces the whole string and
+    # extract would return a frame. q34 adds its constant column to the ten rows that
+    # survive the limit, so it is q33 exactly, which is the point of the pair. q35
+    # writes its three derived keys with `__setitem__` rather than with `assign`. And
+    # the limit is `iloc` on every query that has one except q17, because the port
+    # takes a limit and an offset through one helper and that helper slices.
     #
-    # Where the two are likely to disagree is the queries with more than one route
-    # through pandas. A top ten is `sort_values` then `head` or it is `nlargest`. A
-    # global distinct count is `nunique` or it is `len(drop_duplicates())`. The
-    # reading here takes the obvious one and the port is allowed to pick otherwise
-    # and correct this.
+    # Elementwise arithmetic and comparisons are not declared, here or anywhere else
+    # in this table. TPC-H q6 multiplies two columns and filters on four predicates
+    # and declares `Series.sum`, because a pass over a column with an operator on it
+    # is a constant factor rather than an algorithm, and declaring it would attach
+    # most of three suites to a row nobody would act on. That is why q29, which sums
+    # ninety expressions over one column, declares one operation, and why the ninety
+    # passes are in the query description instead.
+    #
+    # A filter is `DataFrame.loc` whichever way it is spelled. The port writes
+    # `frame[mask]` more often than `frame.loc[mask]` and the two are one operation
+    # in pandas, and the matrix names its row after `loc`.
     ("clickbench", "q0"): ("DataFrame.__len__",),
-    ("clickbench", "q1"): ("DataFrame.loc", "DataFrame.__len__"),
+    ("clickbench", "q1"): ("Series.sum",),
     ("clickbench", "q2"): ("Series.sum", "DataFrame.__len__", "Series.mean"),
     ("clickbench", "q3"): ("Series.mean",),
     ("clickbench", "q4"): ("Series.nunique",),
@@ -299,7 +320,7 @@ DECLARED: dict[tuple[str, str], tuple[str, ...]] = {
         "DataFrame.groupby",
         "GroupBy.nunique",
         "DataFrame.sort_values",
-        "DataFrame.head",
+        "DataFrame.iloc",
     ),
     ("clickbench", "q9"): (
         "DataFrame.groupby",
@@ -309,66 +330,68 @@ DECLARED: dict[tuple[str, str], tuple[str, ...]] = {
         "GroupBy.mean",
         "GroupBy.nunique",
         "DataFrame.sort_values",
-        "DataFrame.head",
+        "DataFrame.iloc",
     ),
     ("clickbench", "q10"): (
         "DataFrame.loc",
         "DataFrame.groupby",
         "GroupBy.nunique",
         "DataFrame.sort_values",
-        "DataFrame.head",
+        "DataFrame.iloc",
     ),
     ("clickbench", "q11"): (
         "DataFrame.loc",
         "DataFrame.groupby",
         "GroupBy.nunique",
         "DataFrame.sort_values",
-        "DataFrame.head",
+        "DataFrame.iloc",
     ),
     ("clickbench", "q12"): (
         "DataFrame.loc",
         "DataFrame.groupby",
         "GroupBy.size",
         "DataFrame.sort_values",
-        "DataFrame.head",
+        "DataFrame.iloc",
     ),
     ("clickbench", "q13"): (
         "DataFrame.loc",
         "DataFrame.groupby",
         "GroupBy.nunique",
         "DataFrame.sort_values",
-        "DataFrame.head",
+        "DataFrame.iloc",
     ),
     ("clickbench", "q14"): (
         "DataFrame.loc",
         "DataFrame.groupby",
         "GroupBy.size",
         "DataFrame.sort_values",
-        "DataFrame.head",
+        "DataFrame.iloc",
     ),
     ("clickbench", "q15"): (
         "DataFrame.groupby",
         "GroupBy.size",
         "DataFrame.sort_values",
-        "DataFrame.head",
+        "DataFrame.iloc",
     ),
     ("clickbench", "q16"): (
         "DataFrame.groupby",
         "GroupBy.size",
         "DataFrame.sort_values",
-        "DataFrame.head",
+        "DataFrame.iloc",
     ),
-    # No sort. The absence is the query, so nothing is declared in its place.
+    # The one limit in the suite with no ordering under it, so the one that is a
+    # `head`. The absent sort is the query, so nothing is declared in its place.
     ("clickbench", "q17"): ("DataFrame.groupby", "GroupBy.size", "DataFrame.head"),
     ("clickbench", "q18"): (
+        "DataFrame.assign",
         "dt.minute",
         "DataFrame.groupby",
         "GroupBy.size",
         "DataFrame.sort_values",
-        "DataFrame.head",
+        "DataFrame.iloc",
     ),
     ("clickbench", "q19"): ("DataFrame.loc",),
-    ("clickbench", "q20"): ("str.contains", "DataFrame.__len__"),
+    ("clickbench", "q20"): ("str.contains", "Series.sum"),
     ("clickbench", "q21"): (
         "str.contains",
         "DataFrame.loc",
@@ -377,7 +400,7 @@ DECLARED: dict[tuple[str, str], tuple[str, ...]] = {
         "GroupBy.min",
         "GroupBy.size",
         "DataFrame.sort_values",
-        "DataFrame.head",
+        "DataFrame.iloc",
     ),
     ("clickbench", "q22"): (
         "str.contains",
@@ -388,38 +411,40 @@ DECLARED: dict[tuple[str, str], tuple[str, ...]] = {
         "GroupBy.size",
         "GroupBy.nunique",
         "DataFrame.sort_values",
-        "DataFrame.head",
+        "DataFrame.iloc",
     ),
     ("clickbench", "q23"): (
         "str.contains",
         "DataFrame.loc",
         "DataFrame.sort_values",
-        "DataFrame.head",
+        "DataFrame.iloc",
     ),
-    ("clickbench", "q24"): ("DataFrame.loc", "DataFrame.sort_values", "DataFrame.head"),
-    ("clickbench", "q25"): ("DataFrame.loc", "DataFrame.sort_values", "DataFrame.head"),
-    ("clickbench", "q26"): ("DataFrame.loc", "DataFrame.sort_values", "DataFrame.head"),
+    ("clickbench", "q24"): ("DataFrame.loc", "DataFrame.sort_values", "DataFrame.iloc"),
+    ("clickbench", "q25"): ("DataFrame.loc", "DataFrame.sort_values", "DataFrame.iloc"),
+    ("clickbench", "q26"): ("DataFrame.loc", "DataFrame.sort_values", "DataFrame.iloc"),
     ("clickbench", "q27"): (
-        "str.len",
         "DataFrame.loc",
+        "DataFrame.assign",
+        "str.len",
         "DataFrame.groupby",
         "GroupBy.agg",
         "GroupBy.mean",
         "GroupBy.size",
         "DataFrame.sort_values",
-        "DataFrame.head",
+        "DataFrame.iloc",
     ),
     ("clickbench", "q28"): (
-        "str.extract",
-        "str.len",
         "DataFrame.loc",
+        "DataFrame.assign",
+        "str.replace",
+        "str.len",
         "DataFrame.groupby",
         "GroupBy.agg",
         "GroupBy.mean",
         "GroupBy.size",
         "GroupBy.min",
         "DataFrame.sort_values",
-        "DataFrame.head",
+        "DataFrame.iloc",
     ),
     ("clickbench", "q29"): ("Series.sum",),
     ("clickbench", "q30"): (
@@ -430,7 +455,7 @@ DECLARED: dict[tuple[str, str], tuple[str, ...]] = {
         "GroupBy.sum",
         "GroupBy.mean",
         "DataFrame.sort_values",
-        "DataFrame.head",
+        "DataFrame.iloc",
     ),
     ("clickbench", "q31"): (
         "DataFrame.loc",
@@ -440,7 +465,7 @@ DECLARED: dict[tuple[str, str], tuple[str, ...]] = {
         "GroupBy.sum",
         "GroupBy.mean",
         "DataFrame.sort_values",
-        "DataFrame.head",
+        "DataFrame.iloc",
     ),
     ("clickbench", "q32"): (
         "DataFrame.groupby",
@@ -449,45 +474,44 @@ DECLARED: dict[tuple[str, str], tuple[str, ...]] = {
         "GroupBy.sum",
         "GroupBy.mean",
         "DataFrame.sort_values",
-        "DataFrame.head",
+        "DataFrame.iloc",
     ),
     ("clickbench", "q33"): (
         "DataFrame.groupby",
         "GroupBy.size",
         "DataFrame.sort_values",
-        "DataFrame.head",
+        "DataFrame.iloc",
     ),
+    # Identical to q33 on purpose. The constant column the query adds to its key goes
+    # on the ten rows that survive the limit, so a planner that dropped the constant
+    # and a port that never grouped on it are doing the same amount of work, and the
+    # pair measures whether the other three engines drop it.
     ("clickbench", "q34"): (
-        "DataFrame.assign",
         "DataFrame.groupby",
         "GroupBy.size",
         "DataFrame.sort_values",
-        "DataFrame.head",
+        "DataFrame.iloc",
     ),
     ("clickbench", "q35"): (
-        "DataFrame.assign",
         "DataFrame.groupby",
         "GroupBy.size",
         "DataFrame.sort_values",
-        "DataFrame.head",
+        "DataFrame.iloc",
     ),
     ("clickbench", "q36"): (
         "DataFrame.loc",
         "DataFrame.groupby",
         "GroupBy.size",
         "DataFrame.sort_values",
-        "DataFrame.head",
+        "DataFrame.iloc",
     ),
     ("clickbench", "q37"): (
         "DataFrame.loc",
         "DataFrame.groupby",
         "GroupBy.size",
         "DataFrame.sort_values",
-        "DataFrame.head",
+        "DataFrame.iloc",
     ),
-    # `DataFrame.iloc` rather than `DataFrame.head` on the last five, because the
-    # offset is what makes them different from every other top ten in the suite and
-    # declaring head would hide exactly that.
     ("clickbench", "q38"): (
         "DataFrame.loc",
         "DataFrame.groupby",
@@ -498,6 +522,7 @@ DECLARED: dict[tuple[str, str], tuple[str, ...]] = {
     ("clickbench", "q39"): (
         "DataFrame.loc",
         "Series.where",
+        "DataFrame.assign",
         "DataFrame.groupby",
         "GroupBy.size",
         "DataFrame.sort_values",
@@ -519,8 +544,9 @@ DECLARED: dict[tuple[str, str], tuple[str, ...]] = {
         "DataFrame.iloc",
     ),
     ("clickbench", "q42"): (
-        "dt.floor",
         "DataFrame.loc",
+        "DataFrame.assign",
+        "dt.floor",
         "DataFrame.groupby",
         "GroupBy.size",
         "DataFrame.sort_values",
@@ -545,6 +571,32 @@ EXCLUDED_ON_PURPOSE = {
         "actually measures is in scan mode, where the answer comes out of Parquet "
         "metadata or out of a read, and that is a reader measurement rather than an "
         "operation one."
+    ),
+}
+
+# Operations where a row exists, so they never appear as a hole, and the row measures
+# the neighbouring operation rather than the one the query runs.
+#
+# Coverage is keyed by pandas name and the matrix is keyed by row, and those are not
+# the same thing: `str.contains literal` and `str.contains regex` are two rows over one
+# name, and they are two rows because the cost is not the same. Where a query runs the
+# variant the matrix has not measured, the covered count says it is measured and it is
+# measured by its neighbour. That is a smaller problem than a hole and it is not
+# nothing, and a table that said nothing about it would be overstating what is known.
+MEASURED_NEARBY = {
+    "str.len": (
+        "The matrix row is a character count and ClickBench q27 and q28 need a byte "
+        "count, which is a different answer on these columns by more than two percent "
+        "and a different kernel. pandas has no spelling that gives bytes on an Arrow "
+        "backed Series, so the port reaches for the Arrow kernel underneath and the "
+        "matrix has nothing that measures that."
+    ),
+    "str.replace": (
+        "The matrix row replaces a literal and q28 runs a regular expression with a "
+        "capture group, which goes through Python's `re` once per row rather than "
+        "through a vectorized kernel. On the published size it may be the slowest "
+        "single cell in the table for any engine, and the row that covers it measures "
+        "something several orders of magnitude cheaper."
     ),
 }
 
@@ -609,6 +661,18 @@ def uncovered(names: tuple[str, ...], table: dict | None = None) -> list[str]:
     return [name for name in names if name not in covered]
 
 
+def nearby(names: tuple[str, ...]) -> list[str]:
+    """Which of these operations are covered by a row measuring their neighbour.
+
+    Args:
+        names: The pandas operations a query declares.
+
+    Returns:
+        The operations in `MEASURED_NEARBY`, in the order the query declared them.
+    """
+    return [name for name in names if name in MEASURED_NEARBY]
+
+
 def coverage() -> dict[str, list[str]]:
     """Every operation the suites touch, and which of them the matrix measures.
 
@@ -648,6 +712,9 @@ def report() -> str:
             measured = len(names) - len(gaps)
             note = f"  {measured} of {len(names)} measured"
             lines.append(note + (f", no row for {', '.join(gaps)}" if gaps else ""))
+            near = nearby(names)
+            if near:
+                lines.append(f"  the row covering {', '.join(near)} measures a neighbour")
         lines.append("")
     gaps = coverage()
     lines.append("## What the suites touch that the matrix does not measure")
@@ -670,6 +737,20 @@ def report() -> str:
         lines.append("")
         lines.append(EXCLUDED_ON_PURPOSE[name])
         lines.append("")
+    touched = {name for name in gaps["covered"] if name in MEASURED_NEARBY}
+    if touched:
+        lines.append("## Rows that measure the neighbour of what a query runs")
+        lines.append("")
+        lines.append(
+            "These are covered, so they are in neither list above, and the row that "
+            "covers them is measuring a cheaper relative of what the query does. The "
+            "matrix already splits `str.contains` into a literal row and a regular "
+            "expression row for the same reason, so these are rows it should split too."
+        )
+        lines.append("")
+        for name in sorted(touched):
+            lines.append(f"{name}: {MEASURED_NEARBY[name]}")
+            lines.append("")
     return "\n".join(lines).rstrip("\n") + "\n"
 
 
