@@ -1,0 +1,53 @@
+{
+  "query": "q22",
+  "size": "1M",
+  "note": "The c column only, because 4 rows tie across the cut at 10, so which rows carry those values is the engine's choice and the values themselves are not. Membership of each returned row in the full answer is checked separately, against the hand implementation rather than against this file.",
+  "statement": "SELECT SearchPhrase, MIN(URL), MIN(Title), COUNT(*) AS c, COUNT(DISTINCT UserID) FROM hits WHERE Title LIKE '%Google%' AND URL NOT LIKE '%.google.%' AND SearchPhrase <> '' GROUP BY SearchPhrase ORDER BY c DESC LIMIT 10",
+  "columns": [
+    "SearchPhrase",
+    "min(URL)",
+    "min(Title)",
+    "c",
+    "count(DISTINCT UserID)"
+  ],
+  "rows_out": 10,
+  "determined": false,
+  "ties": {
+    "10": 4
+  },
+  "checked": [
+    "c"
+  ],
+  "answer": [
+    [
+      10
+    ],
+    [
+      15
+    ],
+    [
+      16
+    ],
+    [
+      45
+    ],
+    [
+      5
+    ],
+    [
+      5
+    ],
+    [
+      5
+    ],
+    [
+      6
+    ],
+    [
+      8
+    ],
+    [
+      8
+    ]
+  ]
+}

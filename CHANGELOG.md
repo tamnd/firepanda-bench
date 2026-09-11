@@ -24,13 +24,43 @@ Eleven queries filter on `SearchPhrase <> ''` or `URL <> ''` or `MobilePhoneMode
 
 `pixi run data clickbench` records a null count per column in the dataset manifest. It comes from the footer statistics, so it costs one metadata read rather than a pass over the data, and a reader that started converting shows up as a changed count in the manifest instead of as a changed answer in a table.
 
-### Thirteen queries are compared on what the SQL determines
+### Twelve queries are compared on what the SQL determines
 
-Thirty two of the 43 end `ORDER BY something LIMIT 10`, and q17 has no order by at all. An answer is determined only when the ordering expression can tell the last included row apart from the first excluded one, and on this data it frequently cannot. At 1M, q26 has 2 rows tied at the cut, q11 has 3, q22 and q24 have 4, q18 and q30 have 5, q40 has 10, q25 has 19, q39 has 177, q38 has 651, q31 has 69,354 because `WatchID` is nearly unique so almost every group has a count of one, and q32 ties everywhere, which means its answer is any ten rows of the table.
+Thirty two of the 43 end `ORDER BY something LIMIT 10`, and q17 has no order by at all. An answer is determined only when the ordering expression can tell the last included row apart from the first excluded one, and on this data it frequently cannot. At 1M, q11 has 3 rows tied at the cut, q22 and q24 have 4, q18 and q30 have 5, q25 has 19, q39 has 177, q38 has 651, q31 has 69,354 because `WatchID` is nearly unique so almost every group has a count of one, and q32 ties everywhere, which means its answer is any ten rows of the table. q40 ties 13 rows at its offset boundary and 10 at its limit boundary.
 
-Those thirteen are flagged in `tools/queries.py` with the reason, and both checks read the flag. The fingerprint comparison in `tools/run.py` and the exact check in `tools/verify.py` compare them on their row count, their column names and their column types, all of which the statements do determine, and neither looks at the values. An engine that answered one of them with five rows, or lost a column, or put an integer where everybody else has a date, is still caught.
+Those twelve are flagged in `tools/queries.py` with the reason, and both checks read the flag. The fingerprint comparison in `tools/run.py` and the exact check in `tools/verify.py` compare them on their row count, their column names and their column types, all of which the statements do determine, and neither looks at the values. An engine that answered one of them with five rows, or lost a column, or put an integer where everybody else has a date, is still caught.
 
-Both outputs say so. `tools/verify.py` marks those queries as compared on shape alone and lists them at the end, and the report has a section naming them with the reason beside each. Making the ports agree here would mean adding an order by the query does not have and then measuring a different query, so the honest thing is a weaker check that announces itself. The list was measured at 1M and the set depends on the size, since which rows tie at row ten depends on how many rows there are, and #47 is where it gets computed against whichever dataset a run actually used.
+Both outputs say so. `tools/verify.py` marks those queries as compared on shape alone and lists them at the end, and the report has a section naming them with the reason beside each. Making the ports agree here would mean adding an order by the query does not have and then measuring a different query, so the honest thing is a weaker check that announces itself. The list is a fact about the size rather than about the queries, since which rows tie at row ten depends on how many rows there are, and it is now recomputed rather than trusted, which is the next entry.
+
+### Ten ClickBench queries answered a second time, by hand
+
+The three checks this suite had all say the same thing: the ports agree. None of them says any port is right. TPC-H does not have that problem, because `pixi run validate-tpch` compares all 66 implementations against the validation output the TPC publishes and that check found two real problems before any number went out. ClickBench publishes no answers, so the strongest check the repository has did not exist here.
+
+`tools/clickbench_hand.py` is a fourth implementation of ten of the queries, written from the SQL text in plain Python over the raw Parquet columns. It shares no planner, no dataframe library, no group by kernel and no type conversion with anything it checks. It reads bytes out of the file, decodes them itself and loops. It is slow on purpose and it never runs inside a measurement.
+
+The ten are the ones where a port had to make a decision rather than transcribe one. q4 and q8 count distinct exactly where the published ClickHouse entry estimates. q27 and q28 average a byte length that is not a character length. q28 also has a regular expression anchored at both ends, so a referer that does not match has to come back unchanged rather than empty. q34 groups by a constant. q22 puts a `NOT LIKE` next to an empty string comparison. q23 is the only `SELECT *`, so it is the only place all 105 type conversions have to be right at once. q39 uses a `CASE` as a grouping key and has an OFFSET. q17 and q25 are two the statement does not determine an answer for.
+
+The answers are committed under `suites/clickbench/expected/`, one file per query, each carrying the statement it is about, the columns, the row count, which columns are compared and why, and the answer itself. `pixi run validate-clickbench` regenerates them from the hand implementation and compares, then compares every engine against them, so a change on either side is a diff rather than a number that moved. All three engines reproduce all ten at 1M.
+
+For the queries the statement does not pin an answer for there is still something to check. The values of the ordering key are determined even when which rows carry them is not, so those are compared, and every row an engine returned has to be a row of the full answer, which is what catches an engine that invented a row rather than picking a different legitimate one out of a tie.
+
+The job runs on a release, on the ClickBench row of the verify workflow, beside the exact check.
+
+### The set of undetermined queries is computed rather than typed in
+
+Which statements the data does not determine an answer for is a fact about the size, not about the queries, so a list written down once at 1M says nothing about 10M. `pixi run validate-clickbench` now ranks each answer by the statement's own ordering expression, counts the rows sharing the rank at each cut, and reports what it found against the list in `tools/queries.py`.
+
+Computing it found two errors in the list that was typed in. q26 was flagged and is not undetermined: it orders by `EventTime, SearchPhrase`, the pair separates the boundary rows even though `EventTime` alone does not, and all three engines return the same ten rows. It was being compared on its shape alone for no reason, which is a lost check on ten rows. q40 was recorded as tying 10 rows, which is its tie at the limit boundary. It also ties 13 at its offset boundary, and a statement with an OFFSET cuts twice: a tie at the offset decides which rows are skipped just as a tie at the limit decides which are kept. Both boundaries are checked now, which matters for q38, q39, q40 and q42.
+
+So the set is twelve rather than thirteen, and one query went back to being compared on its values.
+
+### A large_string is the same string
+
+Polars writes `large_string` for every text column and pandas and DuckDB write `string`. The exact check compared Arrow types after widening integers, floats, decimals, dictionaries and dates, and not strings, so it reported a type difference on 22 of the 43 ClickBench queries, every one of them between two answers holding identical values. `verify.widen` now normalises string and binary widths as well, including the view types, and all 43 agree exactly at 1M across the three engines.
+
+### The tolerance question q3 raised, measured
+
+Issue #47 predicted that `AVG(UserID)` over values near 4.3e17 would need a wider tolerance class than the exact check has, because summing a million of them in float64 loses the low bits. It does not, by about five orders of magnitude. The exact integer sum divided by a million is 1.9481948778949197e18. A naive left to right float64 sum lands 4.17e-13 away in relative terms at 1M, a tree sum lands 1.31e-16 away, and DuckDB, pandas and Polars all land within 2e-16 of each other, which is well inside the 1e-9 ACCUMULATION tolerance the suite already uses. The numbers are written into the comment above `DEFAULT_TOLERANCE` instead of a tolerance entry that would never fire, because a dead entry reads like a measurement that was taken and it would not be one.
 
 ## v0.3.2
 

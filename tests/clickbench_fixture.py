@@ -6,8 +6,8 @@ is edited to catch something.
 
 Eight rows is fewer than any `LIMIT` in the suite takes, so every query returns
 everything that survives its filter and no query has to choose between rows that
-tie on the ordering expression. That matters: thirteen of the 43 do not have a
-determined answer at a real size, and against those thirteen a cross engine
+tie on the ordering expression. That matters: twelve of the 43 do not have a
+determined answer at a real size, and against those twelve a cross engine
 comparison is measuring which way each engine broke a tie rather than whether
 either is right. Eight rows takes the ties off the table and leaves the part that
 is actually a contract, which is the filter, the grouping, the aggregates, the

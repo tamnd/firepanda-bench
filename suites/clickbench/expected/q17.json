@@ -1,0 +1,18 @@
+{
+  "query": "q17",
+  "size": "1M",
+  "note": "Nothing but the shape. The statement has no ORDER BY, so any ten groups are a correct answer and the only real check is that the ten an engine returned are groups that exist with the counts they claim, which the validator does against the hand implementation rather than against this file.",
+  "statement": "SELECT UserID, SearchPhrase, COUNT(*) FROM hits GROUP BY UserID, SearchPhrase LIMIT 10",
+  "columns": [
+    "UserID",
+    "SearchPhrase",
+    "count_star()"
+  ],
+  "rows_out": 10,
+  "determined": false,
+  "ties": {
+    "10": 98484
+  },
+  "checked": [],
+  "answer": []
+}

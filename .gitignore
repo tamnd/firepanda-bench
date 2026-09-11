@@ -19,3 +19,8 @@ engines/firepanda/firepanda-driver.sources
 # Result files stay on the machine that produced them. CI uploads them as run
 # artifacts and draws the site from them, and nothing commits them back here.
 results/*.json
+
+# The answers a run writes with --verify exact. One Arrow file per engine per
+# query, which for ClickBench at 1M is a few hundred megabytes, and they are an
+# input to a check rather than something to keep.
+results/answers/

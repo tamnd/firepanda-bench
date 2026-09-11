@@ -1,0 +1,31 @@
+{
+  "query": "q27",
+  "size": "1M",
+  "note": "Every value of all 3 columns over 2 rows, computed by tools/clickbench_hand.py from the statement above and compared as a multiset, because the order of two rows with the same ordering key is the engine's choice.",
+  "statement": "SELECT CounterID, AVG(STRLEN(URL)) AS l, COUNT(*) AS c FROM hits WHERE URL <> '' GROUP BY CounterID HAVING COUNT(*) > 100000 ORDER BY l DESC LIMIT 25",
+  "columns": [
+    "CounterID",
+    "l",
+    "c"
+  ],
+  "rows_out": 2,
+  "determined": true,
+  "ties": {},
+  "checked": [
+    "CounterID",
+    "l",
+    "c"
+  ],
+  "answer": [
+    [
+      38,
+      76.43665636016307,
+      507770
+    ],
+    [
+      62,
+      94.04974722820991,
+      413812
+    ]
+  ]
+}

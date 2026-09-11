@@ -1,0 +1,49 @@
+{
+  "query": "q25",
+  "size": "1M",
+  "note": "The SearchPhrase column only, because 19 rows tie across the cut at 10, so which rows carry those values is the engine's choice and the values themselves are not. Membership of each returned row in the full answer is checked separately, against the hand implementation rather than against this file.",
+  "statement": "SELECT SearchPhrase FROM hits WHERE SearchPhrase <> '' ORDER BY SearchPhrase LIMIT 10",
+  "columns": [
+    "SearchPhrase"
+  ],
+  "rows_out": 10,
+  "determined": false,
+  "ties": {
+    "10": 19
+  },
+  "checked": [
+    "SearchPhrase"
+  ],
+  "answer": [
+    [
+      "'exis disco ryder injected cuda 7269"
+    ],
+    [
+      "'kbnyjuj gjhnf gtgthm vfibys row 3 ставе"
+    ],
+    [
+      "'kbnyjuj gjhnf gtgthm vfibys row 3 ставе"
+    ],
+    [
+      "'kbnyst exfcnm vekmnbdfhrf"
+    ],
+    [
+      "'kbnyst exfcnm vekmnbdfhrf"
+    ],
+    [
+      "(http://kommedium=cpc&utm_source=main происход"
+    ],
+    [
+      "+100 дизелькатровский стой"
+    ],
+    [
+      "+100 дизелькатровский стой"
+    ],
+    [
+      "+100500 4.5 отзывы"
+    ],
+    [
+      "+100500 4.5 отзывы"
+    ]
+  ]
+}
