@@ -25,11 +25,19 @@ key and an aggregation input. An answer holding a text column is compared the
 same way the other engines' answers are, by the sum of a 64 bit FNV-1a over every
 value, which this file computes rather than borrows.
 
+TPC-H and ClickBench are the two suites whose data cannot be generated here, so
+both read the same files everybody else reads, through DuckDB, before the clock
+starts. The queries themselves are in `tpch.mojo` and `clickbench.mojo`, and each
+of those files opens with why its suite is loaded that way and what that does and
+does not make comparable.
+
 The process prints one line of JSON on stdout. Anything else goes to stderr.
 
 Usage:
     firepanda-driver --query=q4 --rows=10000000 --runs=10
     firepanda-driver --suite=ingestion --query=csv_narrow --path=narrow.csv --runs=7
+    firepanda-driver --suite=clickbench --query=q13 --path='hits_*.parquet' --runs=7
+    firepanda-driver --list=clickbench
 """
 
 from std.collections.span import Span
@@ -59,6 +67,12 @@ from firepanda.io.write import write_csv
 from firepanda.join import JoinKind
 from firepanda.kernel import AggKind, multiply, subtract
 
+from clickbench import (
+    clickbench_refused,
+    clickbench_supported,
+    load_clickbench,
+    run_clickbench,
+)
 from tpch import Tpch, load_tpch, run_tpch, table_names
 
 # 64 bit FNV-1a, which is what `tools/engines/__init__.py` hashes a text value
@@ -1024,6 +1038,35 @@ def column_sum(ref column: AnyArray) raises -> Float64:
         for i in range(len(typed)):
             if typed.is_valid(i):
                 total += Float64(typed[i])
+    elif dtype == DType.int16:
+        # ClickBench is full of small integers, and TPC-H has none, so this arm
+        # and the four below it were missing for as long as this driver only
+        # ran TPC-H. Without them a column of small integers sums to zero and
+        # the run reports a disagreement on a query that is actually right.
+        var typed = column.as_typed[DType.int16]()
+        for i in range(len(typed)):
+            if typed.is_valid(i):
+                total += Float64(typed[i])
+    elif dtype == DType.int8:
+        var typed = column.as_typed[DType.int8]()
+        for i in range(len(typed)):
+            if typed.is_valid(i):
+                total += Float64(typed[i])
+    elif dtype == DType.uint16:
+        var typed = column.as_typed[DType.uint16]()
+        for i in range(len(typed)):
+            if typed.is_valid(i):
+                total += Float64(typed[i])
+    elif dtype == DType.uint8:
+        var typed = column.as_typed[DType.uint8]()
+        for i in range(len(typed)):
+            if typed.is_valid(i):
+                total += Float64(typed[i])
+    elif dtype == DType.bool:
+        var typed = column.as_typed[DType.bool]()
+        for i in range(len(typed)):
+            if typed.is_valid(i) and typed[i]:
+                total += Float64(1)
     elif dtype == DType.uint32:
         var typed = column.as_typed[DType.uint32]()
         for i in range(len(typed)):
@@ -1369,8 +1412,56 @@ def json_string(value: String) -> String:
     return out^
 
 
+def print_clickbench_support() raises:
+    """Prints which ClickBench queries this driver runs and why it refuses any.
+
+    The harness asks the driver this instead of keeping its own list, so a query
+    that arrives here is in the table on the next run with nothing else edited,
+    and a refusal carries the reason the driver actually raises rather than a
+    paraphrase of it that was written once and then drifted.
+
+    Raises:
+        Error: Only what printing does.
+    """
+    var supported = clickbench_supported()
+    var listed = String("[")
+    for i in range(len(supported)):
+        if i > 0:
+            listed += ", "
+        listed += json_string(supported[i])
+    listed += "]"
+
+    # Name, reason, name, reason. The driver builds it that way so there is one
+    # thing to parse rather than two lists that have to stay the same length.
+    var refused = clickbench_refused()
+    var reasons = String("{")
+    for i in range(0, len(refused) - 1, 2):
+        if i > 0:
+            reasons += ", "
+        reasons += String(
+            json_string(refused[i]), ": ", json_string(refused[i + 1])
+        )
+    reasons += "}"
+
+    print(
+        String(
+            '{"ok": true, "suite": "clickbench", "supported": ',
+            listed,
+            ', "unsupported": ',
+            reasons,
+            "}",
+        )
+    )
+
+
 def main() raises:
     """Runs one query and prints one line of JSON."""
+    # Asked before anything else, because this mode answers about the driver and
+    # loads no data at all.
+    if flag("list", "") == "clickbench":
+        print_clickbench_support()
+        return
+
     var query = flag("query", "q4")
     var rows = Int(flag("rows", "1000000"))
     var runs = Int(flag("runs", "10"))
@@ -1381,6 +1472,7 @@ def main() raises:
     var frame_j123 = flag("frame-j123", "0") == "1"
     var reading = suite == "ingestion"
     var playing = suite == "tpch"
+    var hitting = suite == "clickbench"
     # Where to dump the answer as CSV, which is how the twenty two queries get
     # checked against the published validation output. The harness never sets
     # it, so nothing is written on a timed run.
@@ -1391,15 +1483,20 @@ def main() raises:
     var load_start = perf_counter_ns()
     var tables: Tables
     var tpch_tables = Tpch()
+    var hits = DataFrame()
     try:
         # An ingestion query loads nothing before it is timed. Opening the file
         # is the measurement, so anything done here would be work taken out of
         # the number.
-        tables = Tables(
-            DataFrame(), DataFrame(), DataFrame()
-        ) if reading or playing else load(query, rows)
+        tables = (
+            Tables(DataFrame(), DataFrame(), DataFrame()) if reading
+            or playing
+            or hitting else load(query, rows)
+        )
         if playing:
             tpch_tables = load_tpch(tpch_paths())
+        if hitting:
+            hits = load_clickbench(path)
     except error:
         print(
             String(
@@ -1458,6 +1555,8 @@ def main() raises:
                 answer = read_one(query, path)
             elif playing:
                 answer = run_tpch(query, tpch_tables)
+            elif hitting:
+                answer = run_clickbench(query, hits)
             else:
                 answer = run_query(query, tables, probe^, built^)
         except error:
