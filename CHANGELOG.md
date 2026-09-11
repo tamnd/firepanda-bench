@@ -4,6 +4,28 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+## v0.4.0
+
+A minor bump, and the reason is the agreement check rather than the suite. A ClickBench result file written before this reads differently after it, because the check that decides whether four engines got the same answer was reading a third of the suite's columns as zero.
+
+### ClickBench runs on all four engines
+
+firepanda has a cell in all 43 rows now. `engines/firepanda/clickbench.mojo` answers 42 of them and the harness asks the driver which ones with `--list=clickbench` rather than keeping a second copy of the list that drifts out of step.
+
+q28 is the only refusal. It needs a regular expression with a capture group, firepanda has no regular expression engine, and the driver raises with that reason and names tamnd/firepanda#480 rather than answering something close. The estimate when the suite shipped was 31 of 43, and the six rows in that table that predicted a gap were mostly wrong: the minimum over a text column, the byte length per element, the offset under a limit and the conditional answering a text column all exist in the library already. q23 answers by materializing the 105 column frame, which is slow and correct rather than fast and missing.
+
+ClickBench is loaded the way TPC-H is. firepanda reads Parquet by handing the file to DuckDB, so the table is loaded before the clock starts, exactly as pandas and Polars are handed theirs under memory mode, and scan mode is refused by name because timing that load would be timing DuckDB in a table where DuckDB is one of the four engines. That is a real hole at 100M and closing it is the native Parquet reader in the library.
+
+Closes #45.
+
+### The agreement check was reading small integers as zero
+
+`column_sum` in the firepanda driver had an arm for int32, int64, uint32, uint64, float32 and float64 and for nothing narrower. TPC-H never produces a small integer and ClickBench produces them everywhere, so a column of them summed to zero.
+
+What that did was report q7, q14 and q23 as disagreements on answers that were already correct, which is the harmless direction. The other direction is what makes this a minor bump: a query whose only real difference was in a small integer column would have been reported as agreeing. Every published number in this repository rests on that check, so a hole in it is worth a version number even though no number moved. int8, int16, uint8, uint16 and bool are summed now.
+
+All four engines agree on all 43 queries at 1M after it, 31 of them value by value and 12 on shape alone because their statements do not determine which rows come back at that size.
+
 ## v0.3.6
 
 A patch. Nothing here changes what a published number means and no result file a reader has ever seen reads differently after it. What changed is that the scheduled run produces the files the front page says it produces.
