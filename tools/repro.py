@@ -39,6 +39,16 @@ ROOT = Path(__file__).resolve().parent.parent
 # percent is loose, and it is loose on purpose: a shared machine, a different
 # kernel and a warmer page cache all move a query by more than the run to run
 # spread does, and a check that fires on all of those is a check nobody reads.
+#
+# It is a percentage and nothing else, which means on a suite whose medians are
+# milliseconds it is a measurement of how quiet the machine is. ClickBench at 1M
+# is that suite: most of its 129 pairings are under ten milliseconds and a laptop
+# compiling something in another window moves them by three times, in whichever
+# direction the load happened to fall. That is not a reason to add a floor, since
+# raising one to a millisecond here changed 79 flagged pairings to 74, so the
+# drift is the load rather than the timer. It is a reason to reproduce a file on
+# the machine that produced it and while that machine is doing nothing else, and
+# the sizes the scheduled job publishes have medians in seconds.
 DRIFT = 0.25
 
 
