@@ -216,6 +216,32 @@ def bytes_cell(entry: dict | None, baseline: dict | None = None) -> str:
     return text
 
 
+def per_query_table(document: dict, engines: list[str], suite: str, formatter) -> list[str]:
+    """Renders one metric as a table with a row per query and a column per engine.
+
+    Args:
+        document: The result document.
+        engines: The engines in the run.
+        suite: Which suite is being reported.
+        formatter: Takes the row's entries by engine and one engine name, and
+            returns the cell. It gets the whole row rather than one entry because
+            the memory cell is a ratio against the baseline in the same row.
+
+    Returns:
+        The markdown lines.
+    """
+    lines = [
+        "| query | " + " | ".join(engines) + " |",
+        "| --- | " + " | ".join("---:" for _ in engines) + " |",
+    ]
+    for query in query_registry.for_suite(suite):
+        keys = {e: document["results"].get(f"{query.name}/{e}") for e in engines}
+        if not any(keys.values()) or not comparable(document, query.name, engines):
+            continue
+        lines.append(f"| {query.name} | " + " | ".join(formatter(keys, e) for e in engines) + " |")
+    return lines
+
+
 def geometric_mean(values: list[float]) -> float:
     """Returns the geometric mean of a list of ratios.
 
@@ -397,6 +423,52 @@ def clickbench_methodology(document: dict) -> list[str]:
     return lines
 
 
+# Suites whose per query table is split into blocks rather than rendered whole.
+# Forty three rows in one table is a wall, and this is the only suite with that
+# many. The bands come from the query registry, because which queries belong
+# together is a fact about the queries and not about the report.
+BANDED = {"clickbench"}
+
+
+def band_note(checks: bool) -> list[str]:
+    """The paragraph above the banded tables, and the legend for the check column.
+
+    The three agreement states are the point of it. A query here can agree, or
+    disagree, or be one the statement does not determine an answer for, and the
+    third one looks like the second to anybody who has not read the suite README.
+    The first two say what happened to the answers. The third says the question
+    did not have one answer, which is not a fault of any engine in the table.
+
+    Args:
+        checks: Whether the check column is in the tables.
+
+    Returns:
+        The markdown lines, ending in a blank one.
+    """
+    lines = [
+        "The same measurement as any other suite, in blocks rather than in one "
+        "table of 43 rows. The bands are ranges of ClickBench's own numbering cut "
+        "where the workload changes, and a query is in exactly one of them.",
+        "",
+    ]
+    if checks:
+        lines.extend(
+            [
+                "The check column is which comparison is behind the row, and it has "
+                "two values here because the third state is not in these tables at "
+                "all. `values` means every engine returned the same answer, "
+                "compared cell by cell. `shape only` means the statement does not "
+                "determine which rows come back, so two engines returning different "
+                "rows are both right and what was compared is the row count and the "
+                "column set. A query the engines genuinely disagreed on is in its "
+                "own section below and in none of the tables, because a different "
+                "answer is not a faster or slower answer.",
+                "",
+            ]
+        )
+    return lines
+
+
 def made_of(suite: str) -> list[str]:
     """The operations inside each query, and which of them the cost matrix measures.
 
@@ -540,13 +612,27 @@ def render(document: dict, path: Path) -> str:
         )
         lines.append("")
 
-    header = "| query | what it does | " + " | ".join(engines) + " |"
-    lines.append(header)
-    lines.append("| --- | --- | " + " | ".join("---:" for _ in engines) + " |")
+    # One table of 43 rows is a table nobody reads, and ClickBench is one flat
+    # list of 43 with no groups of its own. The bands in the registry are ranges of
+    # the published numbering cut where the workload changes, so each block here is
+    # between three and twelve rows with a sentence saying what is in it.
+    banded = suite in BANDED
+    # The check column exists wherever a query in the suite can be legitimately
+    # unanswerable, which today is ClickBench and nothing else. A reader cannot be
+    # expected to hold twelve query names from a section further down in their head
+    # while reading a timing, so the row says which check is behind it.
+    checks = any(query.undetermined for query in query_registry.for_suite(suite))
+    header = (
+        "| query | what it does | " + ("check | " if checks else "") + " | ".join(engines) + " |"
+    )
+    rule = (
+        "| --- | --- | " + ("--- | " if checks else "") + " | ".join("---:" for _ in engines) + " |"
+    )
 
     disagreed: list[str] = []
     missing: list[tuple[str, str, str]] = []
     asides: list[tuple[str, str, str]] = []
+    rows: dict[str, list[str]] = {}
     for query in query_registry.for_suite(suite):
         keys = {e: document["results"].get(f"{query.name}/{e}") for e in engines}
         if not any(keys.values()):
@@ -562,7 +648,25 @@ def render(document: dict, path: Path) -> str:
             elif entry.get("note"):
                 asides.append((query.name, engine, entry["note"]))
         row = " | ".join(cell(keys[e]) for e in engines)
-        lines.append(f"| {query.name} | {query.description} | {row} |")
+        check = f"{'shape only' if query.undetermined else 'values'} | " if checks else ""
+        band = query.group if banded else ""
+        rows.setdefault(band, []).append(f"| {query.name} | {query.description} | {check}{row} |")
+
+    if banded:
+        lines.append("### Wall clock, by band")
+        lines.append("")
+        lines.extend(band_note(checks))
+        for band, (_, blurb) in query_registry.CLICKBENCH_BANDS.items():
+            if band not in rows:
+                continue
+            lines.append(f"#### {band}")
+            lines.append("")
+            lines.append(blurb)
+            lines.append("")
+            lines.extend([header, rule, *rows[band]])
+            lines.append("")
+    else:
+        lines.extend([header, rule, *rows.get("", [])])
 
     if suite == "ingestion":
         lines.append("")
@@ -605,6 +709,9 @@ def render(document: dict, path: Path) -> str:
             lines.append(f"| {query.name} | {row} |")
 
     lines.append("")
+    if banded:
+        lines.append("### Peak memory")
+        lines.append("")
     lines.append(
         f"Peak resident memory, which is the whole process and includes the data, "
         f"and what that is as a multiple of {BASELINE}. Above one is less memory "
@@ -615,16 +722,16 @@ def render(document: dict, path: Path) -> str:
         f"that took longer."
     )
     lines.append("")
-    lines.append("| query | " + " | ".join(engines) + " |")
-    lines.append("| --- | " + " | ".join("---:" for _ in engines) + " |")
-    for query in query_registry.for_suite(suite):
-        keys = {e: document["results"].get(f"{query.name}/{e}") for e in engines}
-        if not any(keys.values()) or not comparable(document, query.name, engines):
-            continue
-        row = " | ".join(bytes_cell(keys[e], keys.get(BASELINE)) for e in engines)
-        lines.append(f"| {query.name} | {row} |")
+    lines.extend(
+        per_query_table(
+            document, engines, suite, lambda keys, e: bytes_cell(keys[e], keys.get(BASELINE))
+        )
+    )
 
     lines.append("")
+    if banded:
+        lines.append("### The tail")
+        lines.append("")
     lines.append(
         "The ninety ninth percentile of the warm runs, and what it is as a "
         "multiple of the median. A number close to one is a query that costs the "
@@ -632,16 +739,12 @@ def render(document: dict, path: Path) -> str:
         "anyone who has to run it behind something."
     )
     lines.append("")
-    lines.append("| query | " + " | ".join(engines) + " |")
-    lines.append("| --- | " + " | ".join("---:" for _ in engines) + " |")
-    for query in query_registry.for_suite(suite):
-        keys = {e: document["results"].get(f"{query.name}/{e}") for e in engines}
-        if not any(keys.values()) or not comparable(document, query.name, engines):
-            continue
-        row = " | ".join(tail_cell(keys[e]) for e in engines)
-        lines.append(f"| {query.name} | {row} |")
+    lines.extend(per_query_table(document, engines, suite, lambda keys, e: tail_cell(keys[e])))
 
     lines.append("")
+    if banded:
+        lines.append("### CPU")
+        lines.append("")
     lines.append(
         "CPU seconds per run, user and system together, and how many cores that "
         "came to while the query was in flight. An engine that is four times "
@@ -649,14 +752,7 @@ def render(document: dict, path: Path) -> str:
         "not the same result, and the wall clock table cannot tell them apart."
     )
     lines.append("")
-    lines.append("| query | " + " | ".join(engines) + " |")
-    lines.append("| --- | " + " | ".join("---:" for _ in engines) + " |")
-    for query in query_registry.for_suite(suite):
-        keys = {e: document["results"].get(f"{query.name}/{e}") for e in engines}
-        if not any(keys.values()) or not comparable(document, query.name, engines):
-            continue
-        row = " | ".join(cpu_cell(keys[e]) for e in engines)
-        lines.append(f"| {query.name} | {row} |")
+    lines.extend(per_query_table(document, engines, suite, lambda keys, e: cpu_cell(keys[e])))
 
     lines.append("")
     lines.append("### Scorecard")
@@ -733,14 +829,33 @@ def render(document: dict, path: Path) -> str:
         lines.append(
             "These queries do not determine which rows come back, so two engines "
             "returning different rows are both right and the answers are compared "
-            "on their row count and their columns rather than on their values. The "
-            "timings are as good as any other row in the table. The agreement "
-            "behind them is not, and a reader should know which rows those are "
-            "rather than assume the whole suite is checked the same way."
+            "on their row count and their columns rather than on their values. "
+            "They are the rows marked `shape only` above. The timings are as good "
+            "as any other row in the table. The agreement behind them is not, and "
+            "a reader should know which rows those are rather than assume the "
+            "whole suite is checked the same way."
         )
         lines.append("")
         for name, reason in weak:
             lines.append(f"- {name}: {reason}")
+        # Which rows tie at row ten is a function of how many rows there are, so
+        # this list belongs to a size and this file may not be that size. Carrying
+        # it over is the only thing to do with it and it is not the same as having
+        # checked it, and a reader looking at a 10M table should not be told a
+        # number computed at 1M as though it were about the file in front of them.
+        computed_at = query_registry.CLICKBENCH_UNDETERMINED_SIZE
+        if suite == "clickbench" and document["size"] != computed_at:
+            lines.append("")
+            lines.append(
+                f"That list was computed at {computed_at} and this file is "
+                f"{document['size']}. Which rows tie at the row a limit cuts on "
+                f"depends on how many rows there are, so at this size the list is "
+                f"carried over rather than checked: a query that ties here and not "
+                f"at {computed_at} shows up as a disagreement below rather than "
+                f"as a weaker check here. "
+                f"`pixi run validate-clickbench --size {document['size']}` is what "
+                f"computes the list for this size."
+            )
 
     if disagreed:
         lines.append("")
@@ -749,12 +864,27 @@ def render(document: dict, path: Path) -> str:
         lines.append(
             "These are excluded from every table above. A different answer is "
             "not a slower or faster answer, it is a different query, and until "
-            "the disagreement is explained neither timing means anything."
+            "the disagreement is explained neither timing means anything. Each "
+            "line is the row count and the answer digest per engine."
         )
         lines.append("")
         for query in disagreed:
             seen = document["agreement"][query]["by_engine"]
-            lines.append(f"- {query}: " + ", ".join(f"{e} {v}" for e, v in sorted(seen.items())))
+            reason = query_registry.undetermined(suite, query)
+            # A query compared on its shape alone that still disagreed is the worse
+            # of the two cases and reads like the milder one, since its name is also
+            # in the weaker section above. The values were never compared here, so
+            # what differed is the row count or the column set, and neither of those
+            # is something the statement left open.
+            tail = (
+                " The values on this one are not compared at all, since "
+                f"{reason}, so this is a difference in the row count or the columns."
+                if reason
+                else ""
+            )
+            lines.append(
+                f"- {query}: " + ", ".join(f"{e} {v}" for e, v in sorted(seen.items())) + tail
+            )
 
     lines.append("")
     lines.append(f"Source: `{path.relative_to(ROOT) if path.is_relative_to(ROOT) else path}`.")

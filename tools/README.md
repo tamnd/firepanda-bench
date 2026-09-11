@@ -9,9 +9,9 @@ Every file here is an entry point named by a task in `pixi.toml`, and every one 
 | `worker.py` | | Not called directly. Loads one engine, runs one query N times, prints one JSON sample set on stdout. |
 | `validate_tpch.py` | `pixi run validate-tpch` | Compare every engine's TPC-H answer against the specification's published validation output, cell by cell. |
 | `validate_results.py` | `pixi run validate-results` | Check a result file has every field the report and the site need, and that every failure carries a reason. |
-| `repro.py` | `pixi run repro` | Re-run exactly the configuration that produced a given result file and report any median that drifted by more than a quarter. |
-| `report.py` | `pixi run report` | Render result files as markdown: timings, peak resident set, a geometric mean scorecard, what did not run and why, and which queries the engines disagreed on. |
-| `site.py` | `pixi run site` | Build the static site, with a time series per query so a regression is visible as a step in a graph. |
+| `repro.py` | `pixi run repro` | Re-run exactly the configuration that produced a given result file and report any median that drifted by more than a quarter, and any answer that changed. |
+| `report.py` | `pixi run report` | Render result files as markdown: timings, peak resident set, a geometric mean scorecard, what did not run and why, and which queries the engines disagreed on. ClickBench is rendered in bands rather than as one table of 43 rows. |
+| `site.py` | `pixi run site` | Build the static site, with a time series per query so a regression is visible as a step in a graph, and a chart of scan mode against memory mode wherever a suite ran in both. |
 | `env_report.py` | `pixi run env-report` | Capture engine versions, the Mojo toolchain version, CPU model, core count, RAM, governor, transparent huge pages, turbo and swappiness into `results/env.json`. |
 | `check_sweep.py` | `pixi run check-sweep` | Flag a result file with an implausible speedup, with too little coverage to quote, or in which firepanda wins every row. |
 | `operations.py` | `pixi run operations` | List what each query is made of, in pandas names, and which of those operations the firepanda-compat cost matrix has a row for. |

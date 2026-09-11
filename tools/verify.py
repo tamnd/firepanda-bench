@@ -515,7 +515,7 @@ def verify_query(compare, suite: str, query: str, engines: dict[str, Path]) -> d
     # tolerance is chosen and before the comparison layer is touched at all,
     # because this is the stronger of the two checks in the repository and leaving
     # it as it was would mean the strongest check is the one that fails hardest on
-    # the thirteen queries where a difference is not a defect.
+    # the twelve queries where a difference is not a defect.
     reason = query_registry.undetermined(suite, query)
     if reason:
         return shape_only(

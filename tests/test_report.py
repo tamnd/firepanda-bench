@@ -14,6 +14,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 
+import queries
 import report
 
 
@@ -179,16 +180,30 @@ def test_the_memory_table_says_which_way_round_it_reads():
     assert "Above one is less memory used" in text
 
 
-def _clickbench(size: str) -> dict:
-    """Builds a ClickBench result document with one query and two engines.
+def _clickbench(
+    size: str, names: tuple[str, ...] = ("q0",), disagreed: tuple[str, ...] = ()
+) -> dict:
+    """Builds a ClickBench result document with two engines.
 
     Args:
         size: The dataset size, which is what decides whether the numbers are
             comparable to a published ClickBench one.
+        names: Which queries ran. The default is the one query the older tests
+            here were written against.
+        disagreed: Which of them the engines did not agree on.
 
     Returns:
         The document.
     """
+    results = {}
+    agreement = {}
+    for name in names:
+        results[f"{name}/pandas"] = {"ok": True, "median_s": 2.0, "peak_rss_bytes": 200}
+        results[f"{name}/duckdb"] = {"ok": True, "median_s": 1.0, "peak_rss_bytes": 100}
+        agreement[name] = {
+            "agreed": name not in disagreed,
+            "by_engine": {"pandas": "10:aaaa", "duckdb": "10:bbbb"},
+        }
     return {
         "suite": "clickbench",
         "size": size,
@@ -196,11 +211,8 @@ def _clickbench(size: str) -> dict:
         "runs": 10,
         "engines": {"pandas": "3.0.5", "duckdb": "1.1.3"},
         "machine": {},
-        "results": {
-            "q0/pandas": {"ok": True, "median_s": 2.0, "peak_rss_bytes": 200},
-            "q0/duckdb": {"ok": True, "median_s": 1.0, "peak_rss_bytes": 100},
-        },
-        "agreement": {"q0": {"agreed": True, "by_engine": {}}},
+        "results": results,
+        "agreement": agreement,
     }
 
 
@@ -253,3 +265,92 @@ def test_the_methodology_block_names_the_number_of_runs_the_file_actually_took()
 def test_another_suite_does_not_get_the_clickbench_block():
     """It is a statement about one published table and it is wrong anywhere else."""
     assert "c6a.4xlarge" not in report.render(_document(True), Path("x.json"))
+
+
+def test_the_clickbench_table_is_split_into_bands():
+    """Forty three rows in one table is a wall. Six blocks with a sentence each is
+    the same numbers where a reader can find them."""
+    text = report.render(_clickbench("1M", ("q0", "q7", "q27")), Path("x.json"))
+    assert "#### scan" in text
+    assert "#### groupby" in text
+    assert "#### derived" in text
+    # The bands a run has no queries in are not empty headings.
+    assert "#### window" not in text
+
+
+def test_a_band_carries_the_sentence_saying_what_is_in_it():
+    """A heading that is one word is a heading that gets skipped."""
+    text = report.render(_clickbench("1M", ("q27",)), Path("x.json"))
+    blurb = queries.CLICKBENCH_BANDS["derived"][1]
+    assert blurb in text
+
+
+def test_a_query_is_in_its_own_band_and_no_other():
+    """The blocks are a reading order, and the same query twice would make the
+    scorecard above them read as though the suite were longer than it is."""
+    text = report.render(_clickbench("1M", ("q0", "q7")), Path("x.json"))
+    scan = text[text.index("#### scan") : text.index("#### groupby")]
+    assert "| q0 |" in scan
+    assert "| q7 |" not in scan
+
+
+def test_the_check_column_says_which_comparison_is_behind_the_row():
+    """The second of the three states, in the row rather than in a section further
+    down that a reader has to hold in their head."""
+    text = report.render(_clickbench("1M", ("q0", "q11")), Path("x.json"))
+    # The wall clock tables only. Every table below them has a row per query too.
+    wall = text[: text.index("### Peak memory")].splitlines()
+    rows = {line.split("|")[1].strip(): line for line in wall if line.startswith("| q")}
+    assert "values" in rows["q0"]
+    assert "shape only" in rows["q11"]
+
+
+def test_a_suite_where_no_query_can_be_undetermined_has_no_check_column():
+    """Every row of it would say the same word, which is a column that costs width
+    and carries nothing."""
+    assert "| check |" not in report.render(_document(True), Path("x.json"))
+
+
+def test_the_three_agreement_states_are_told_apart():
+    """Agrees, does not agree, and was never fully determined. A reader who sees a
+    query missing from a table assumes the worst of the three, so the third one is
+    in the table with a word on it rather than absent."""
+    text = report.render(_clickbench("1M", ("q0", "q11", "q7"), disagreed=("q7",)), Path("x.json"))
+    table = text[: text.index("### Peak memory")]
+    assert "| q0 |" in table and "values" in table
+    assert "| q11 |" in table and "shape only" in table
+    assert "| q7 |" not in table
+    assert "q7:" in text[text.index("### Queries the engines did not agree on") :]
+
+
+def test_a_disagreement_on_a_query_nobody_checked_the_values_of_is_the_loud_one():
+    """Its name is also in the weaker section above, which reads like the milder
+    case. What differed here is the row count or the columns, and the statement
+    left neither of those open."""
+    text = report.render(_clickbench("1M", ("q11",), disagreed=("q11",)), Path("x.json"))
+    assert "not compared at all" in text
+    assert "a difference in the row count or the columns" in text
+
+
+def test_the_weaker_list_says_which_size_it_was_computed_at_when_it_is_another():
+    """Which rows tie at the row a limit cuts on depends on how many rows there
+    are, so at 10M the list is carried over rather than checked."""
+    text = report.render(_clickbench("10M", ("q11",)), Path("x.json"))
+    assert "computed at 1M and this file is 10M" in text
+    assert "validate-clickbench --size 10M" in text
+
+
+def test_the_weaker_list_says_nothing_about_the_size_when_it_is_the_right_one():
+    """At the size it was computed at there is nothing to warn about."""
+    assert "carried over rather than checked" not in report.render(
+        _clickbench("1M", ("q11",)), Path("x.json")
+    )
+
+
+def test_the_memory_table_covers_every_query_the_banded_table_does():
+    """The bands split the wall clock table and not the suite. A query that is in
+    one and not the other is a query somebody will conclude something about."""
+    text = report.render(_clickbench("1M", ("q0", "q7", "q27")), Path("x.json"))
+    memory = text[text.index("### Peak memory") : text.index("### The tail")]
+    for name in ("q0", "q7", "q27"):
+        assert f"| {name} |" in memory

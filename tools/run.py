@@ -233,9 +233,9 @@ def agreement(measurements: list[metrics.Measurement], suite: str) -> dict[str, 
     that turned four TPC-H queries into reported disagreements on a run where all
     three engines had matched the specification's published answers exactly.
 
-    Thirteen ClickBench queries get a weaker comparison and say so. Their
+    Twelve ClickBench queries get a weaker comparison and say so. Their
     statements do not determine which rows come back, so two engines returning
-    different rows are both right, and comparing the values would report thirteen
+    different rows are both right, and comparing the values would report twelve
     disagreements on every run of a suite that has none. What is compared instead
     is the row count and the column set, which the statements do determine. The
     entry carries the reason, so a reader is told the check was weaker rather than
