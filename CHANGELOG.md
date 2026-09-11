@@ -4,6 +4,26 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### The hits table can be fetched, and it is the first suite here whose data cannot be generated
+
+`tools/data.py --suite clickbench --size 1M` now downloads the ClickBench hits table. This is the fourth suite in the repository and the first one with no generator behind it at all.
+
+That is worth stating rather than hiding, because it is the reason the suite is worth having. db-benchmark data comes out of a splitmix64 counter stream and the ingestion files come out of the same generator, so both are uniform by construction. TPC-H comes out of `dbgen`, which is at least a real distribution but still a synthetic one. The hits table is a dump of what a real product recorded. It has skewed cardinalities, a URL column with a heavy tail, empty strings standing in for nulls, and 105 columns of which most queries touch three. Everything in this library has been optimized against uniform generated keys, and this is the first data here that has none.
+
+There are three sizes and only one of them is ClickBench. `100M` is the published dataset, 99,997,497 rows across a hundred partitions and about twelve gigabytes on disk. `10M` and `1M` are the first ten and the first one of those partitions. They exist because a suite that can only be run on a machine with a spare hundred gigabytes is a suite that gets run four times a year, and because the agreement check needs a size a normal CI job can pull. A number from a partial size is not comparable to a published one, and the manifest records `is_published_size` so the report can say so on the table rather than in a footnote.
+
+The download is resumable. A hundred files over a slow link will be interrupted at least once, so bytes land in a `.part` file and a restart asks the server to continue from where that file ends. Every partition is hashed after it lands and the digest goes in the manifest, which is what a second run checks before it decides the cache is usable. That matters more here than it does for a generated suite: a truncated download that nobody notices is a wrong answer rather than an error, and a half written Parquet file usually still opens.
+
+Free space is checked before the first byte moves. The sizes come from a HEAD request per partition, which costs a couple of seconds for the full set, and refusing up front is a lot cheaper than filling the disk on the eightieth file. The full size also has its row count checked against the published 99,997,497, since a download that quietly lost a partition would otherwise just look like a faster benchmark.
+
+One detail is load bearing and looks like nothing. The bucket is behind Cloudflare and Cloudflare answers 403 to urllib's default `Python-urllib/3.13` user agent. The file is not restricted in any way, curl fetches it with no headers at all, it is that string alone that is refused. So the downloader sends a user agent naming this repository, and there is a test holding it in place, because without it every download fails with an error that reads like the dataset has been taken down.
+
+Nothing converts to CSV. ClickBench publishes a TSV form, nobody benchmarks against it any more, the ingestion suite is where a reader gets measured, and a seventy gigabyte text file in the cache helps nobody.
+
+Verified end to end at the 1M size: 122,446,530 bytes, 1,000,000 rows, 105 columns, and a second run reuses the cache after checking every digest.
+
+No queries run yet. This is the data and the manifest only.
+
 ### The join set now has the character join the public suite has, and j4 and j5 are not the queries they were
 
 The join queries here were five and none of them joined on a text key. Upstream db-benchmark's five are named for their key types: small inner on an integer, medium inner on an integer, medium outer on an integer, medium inner on a character key, big inner on an integer. Only the fourth joins on text. The set here had a big inner and a big left join in the last two places, so it was missing the one query in the public suite that exercises a text key and it had one query the public suite does not have.

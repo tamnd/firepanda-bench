@@ -24,9 +24,16 @@ thing: a narrow one that is what most files look like, a wide one that trades
 bytes for fields, a quoted one that no reader can shortcut, and one that is nine
 tenths empty.
 
+The ClickBench suite is the other exception and a larger one. Its data cannot be
+generated at all, because the hits table is a dump of what a real product
+recorded rather than anything a seed produces, so `clickbench.py` downloads it.
+That is the reason the suite is worth having: everything in this library has been
+optimized against uniform generated keys, and the hits table has none.
+
 Usage:
     python tools/data.py --suite db-benchmark --size 0.5GB [--formats parquet,csv]
     python tools/data.py --suite ingestion --size 10M
+    python tools/data.py --suite clickbench --size 1M
 """
 
 from __future__ import annotations
@@ -66,8 +73,15 @@ SIZES = {
 # a single byte figure would describe none of them.
 INGESTION_SIZES = {"1M": 1_000_000, "10M": 10_000_000, "100M": 100_000_000}
 
-# The size to build when none is named, per suite.
-DEFAULT_SIZE = {"db-benchmark": "0.5GB", "tpch": "sf1", "ingestion": "10M"}
+# The size to build when none is named, per suite. ClickBench defaults to the
+# smallest of its three, because the other two are a twelve gigabyte download and
+# nobody should get one of those by leaving an argument off.
+DEFAULT_SIZE = {
+    "db-benchmark": "0.5GB",
+    "tpch": "sf1",
+    "ingestion": "10M",
+    "clickbench": "1M",
+}
 
 # How many columns the wide ingestion file has.
 WIDE_COLUMNS = 50
@@ -466,8 +480,18 @@ def build(suite: str, size: str, formats: list[str], force: bool) -> Path:
 
         return tpch.build(size, DATA_ROOT, force)
 
+    if suite == "clickbench":
+        # Not generated either, and for a stronger reason than TPC-H. The hits
+        # table is a dump of real traffic, there is no generator for it anywhere,
+        # and that is exactly why it finds things a generated suite cannot.
+        import clickbench
+
+        return clickbench.build(size, DATA_ROOT, force)
+
     if suite not in ("db-benchmark", "ingestion"):
-        raise SystemExit(f"unknown suite '{suite}'. Known: db-benchmark, ingestion, tpch.")
+        raise SystemExit(
+            f"unknown suite '{suite}'. Known: db-benchmark, ingestion, tpch, clickbench."
+        )
 
     known = INGESTION_SIZES if suite == "ingestion" else SIZES
     if size not in known:
@@ -533,13 +557,15 @@ def main(argv: list[str] | None = None) -> int:
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--suite", default="db-benchmark", choices=("db-benchmark", "tpch", "ingestion")
+        "--suite",
+        default="db-benchmark",
+        choices=("db-benchmark", "tpch", "ingestion", "clickbench"),
     )
     parser.add_argument(
         "--size",
         default="",
         help="0.5GB, 5GB or 50GB for db-benchmark; sf1, sf10 or sf100 for tpch; "
-        "1M, 10M or 100M for ingestion",
+        "1M, 10M or 100M for ingestion; 1M, 10M or 100M for clickbench",
     )
     parser.add_argument(
         "--formats",

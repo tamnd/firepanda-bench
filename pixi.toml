@@ -49,7 +49,8 @@ default = { solve-group = "main" }
 # added at M9 along with that runner.
 
 [tasks]
-# Generate or fetch datasets. db-benchmark data is generated, TPC-H uses dbgen.
+# Generate or fetch datasets. db-benchmark data is generated, TPC-H uses dbgen,
+# and ClickBench is downloaded because the hits table has no generator at all.
 data = "python tools/data.py"
 
 # --runs defaults to 10; the median is reported and the interquartile range is
