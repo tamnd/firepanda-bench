@@ -34,9 +34,14 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 import engines
-from engines import pandas_clickbench
 
+# The port is imported the same way the engines below are, rather than with an
+# import statement, because it imports pandas at the top of its own file. A plain
+# import would turn a machine without pandas into a collection error for the whole
+# module instead of a skip. CI installs pandas, so this skips on a contributor's
+# machine and never in the checks.
 pd = pytest.importorskip("pandas")
+pandas_clickbench = pytest.importorskip("engines.pandas_clickbench")
 
 
 def duckdb_engine():

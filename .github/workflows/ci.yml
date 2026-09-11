@@ -40,8 +40,13 @@ jobs:
       # and it is the one engine that runs a benchmark's published SQL rather
       # than a port of it, so the tests holding that arrangement in place are
       # worth more than most and they cannot run without it installed.
+      #
+      # pandas is here because the ClickBench port is checked by running it and
+      # DuckDB over the same file and requiring the same answer for all 43. That
+      # check is the whole reason the port can be trusted, and without pandas
+      # installed it does not fail, it skips.
       - name: Tests
-        run: uvx --with pytest --with pyarrow --with duckdb pytest -q
+        run: uvx --with pytest --with pyarrow --with duckdb --with pandas pytest -q
 
       # Every result file must name every engine version and the Mojo toolchain that
       # compiled firepanda. A result that cannot say what produced it is not a result.
