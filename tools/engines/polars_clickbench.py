@@ -45,7 +45,7 @@ for a narrower reason. It makes q23 through q26 deterministic, because those fou
 sort raw rows in scan order and nothing upstream of them reorders. It does not make
 the grouped queries deterministic, because `group_by` is left unordered and a
 stable sort over an unstable input is still unstable. Forcing order on the group by
-would fix that and would cost far more than the determinism is worth, since thirteen
+would fix that and would cost far more than the determinism is worth, since twelve
 of these queries do not have one right answer at any setting.
 """
 

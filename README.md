@@ -49,7 +49,7 @@ This repository answers how fast on published workloads. [firepanda-compat](http
 
 So every query declares what it is made of, in pandas names, read off the pandas implementation rather than off the query text. `pixi run operations` prints it, the report carries the table per suite, and the last column of that table is the operations a published query runs that the cost matrix has no row for, which is a hole over there with a query attached to it.
 
-The first run of that link found 12 such operations and 11 of them have rows now, so the column is down to `pandas.read_csv`, which is excluded on purpose because reading a CSV is what the ingestion suite here already measures. The vendored copy of the operation table lives at `tools/cost-matrix.json` and is refreshed with `curl -fsSL https://raw.githubusercontent.com/tamnd/firepanda-compat/main/operations.json -o tools/cost-matrix.json`.
+The first run of that link found 12 such operations and 11 of them have rows now. ClickBench then added five more: taking rows at an offset, a minimum over a column, a distinct count over one, a conditional expression, and reading the minute out of a timestamp. Two names are covered by a row that measures a neighbour rather than the operation itself, which is a smaller problem than a hole and is listed separately rather than counted as measured. The only name excluded on purpose is `pandas.read_csv`, because reading a CSV is what the ingestion suite here already measures. The vendored copy of the operation table lives at `tools/cost-matrix.json` and is refreshed with `curl -fsSL https://raw.githubusercontent.com/tamnd/firepanda-compat/main/operations.json -o tools/cost-matrix.json`.
 
 ## How a run is fair, and where it is not
 

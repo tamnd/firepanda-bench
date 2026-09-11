@@ -514,27 +514,49 @@ def made_of(suite: str) -> list[str]:
             f"{', '.join(f'`{n}`' for n in gaps) if gaps else 'none'} |"
         )
 
+    # Two kinds of empty cell over there, kept apart. "Nobody has measured this yet"
+    # is a hole worth filing. "This will never have a row and here is why" is a
+    # decision, and printing the two in one list makes the decision read as an excuse
+    # for the hole.
     every = {gap for _, _, gaps in rows for gap in gaps}
-    if every:
-        count = f"{len(every)} operation{'' if len(every) == 1 else 's'}"
+    holes = sorted(name for name in every if name not in operations.EXCLUDED_ON_PURPOSE)
+    excluded = sorted(name for name in every if name in operations.EXCLUDED_ON_PURPOSE)
+    if holes:
+        count = f"{len(holes)} operation{'' if len(holes) == 1 else 's'}"
         lines.append("")
         lines.append(
             "The last column is a hole in the cost matrix with a query attached to "
             "it, and it is published rather than quietly dropped for the same reason "
             f"every other loss in this report is. {count} this suite runs "
-            + ("has" if len(every) == 1 else "have")
+            + ("has" if len(holes) == 1 else "have")
             + " no row over there: "
-            + ", ".join(f"`{name}`" for name in sorted(every))
+            + ", ".join(f"`{name}`" for name in holes)
             + "."
         )
-        if every == {"pandas.read_csv"}:
-            lines.append("")
-            lines.append(
-                "That one is not really a hole. Reading a CSV is what this whole "
-                "suite measures, on five file shapes and against four engines, and "
-                "the compat corpus is Arrow on disk rather than text. A row over "
-                "there would be a worse version of the table above."
-            )
+    for name in excluded:
+        lines.append("")
+        lines.append(
+            f"`{name}` is in that column too and is not a hole. "
+            + operations.EXCLUDED_ON_PURPOSE[name]
+        )
+
+    # Covered and measured by the wrong neighbour, which the column above cannot say
+    # because it only knows whether a row exists. Left out of the table and put here
+    # so that the count in the column stays a count of holes.
+    near = sorted({name for _, names, _ in rows for name in operations.nearby(names)})
+    if near:
+        lines.append("")
+        subject = "operation has" if len(near) == 1 else "operations have"
+        lines.append(
+            f"{len(near)} more {subject} a row that measures a neighbour of what the "
+            "query runs, so they are not in the column above and they are not fully "
+            "measured either: "
+            + ", ".join(f"`{name}`" for name in near)
+            + ". The matrix is keyed by row and coverage is keyed by pandas name, and "
+            "a name can carry two rows with different costs, which is why it already "
+            "has a literal `str.contains` and a regular expression one. "
+            "`pixi run operations` prints what each of these measures instead."
+        )
     return lines
 
 

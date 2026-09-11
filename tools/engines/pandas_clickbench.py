@@ -41,7 +41,7 @@ the slowest single cell in the whole published table across all four engines.
 
 Every sort passes `kind="stable"`. That costs a little and it buys one thing worth
 having: a pandas answer that is the same on every run over the same data. It does
-not make pandas agree with DuckDB. Thirteen of these queries end with a limit
+not make pandas agree with DuckDB. Twelve of these queries end with a limit
 across a tie and therefore do not have one right answer at all, which is not
 something a port can fix and is tracked separately.
 """

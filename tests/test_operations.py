@@ -96,9 +96,14 @@ def test_the_reductions_that_keep_their_values_per_group_have_rows_now():
 
 def test_every_operation_with_no_row_is_either_a_known_hole_or_excluded_on_purpose():
     # This used to say the only uncovered name was pandas.read_csv. ClickBench added
-    # six real ones, and the point of pinning the list is unchanged: a name arriving
+    # five real ones, and the point of pinning the list is unchanged: a name arriving
     # here belongs either in the matrix, in the exclusion table with a reason, or in
     # this list with somebody having looked at it.
+    #
+    # `str.extract` was in this list and came off it when the declarations were read
+    # off the pandas port rather than off the published SQL. q28 replaces the whole
+    # string with its capture group rather than extracting one, and the name that
+    # covers what it does is `str.replace`, which has a row.
     assert operations.coverage()["missing"] == [
         "DataFrame.__len__",
         "DataFrame.iloc",
@@ -107,7 +112,6 @@ def test_every_operation_with_no_row_is_either_a_known_hole_or_excluded_on_purpo
         "Series.where",
         "dt.minute",
         "pandas.read_csv",
-        "str.extract",
     ]
 
 
@@ -119,7 +123,7 @@ def test_the_holes_and_the_deliberate_exclusions_are_not_described_the_same_way(
     assert "pandas.read_csv is a deliberate exclusion rather than a hole." in text
     assert "DataFrame.__len__ is a deliberate exclusion rather than a hole." in text
     assert "should grow next" in text
-    for name in ("Series.nunique", "dt.minute", "str.extract"):
+    for name in ("Series.nunique", "dt.minute", "DataFrame.iloc"):
         assert name in text.split("is a deliberate exclusion")[0]
 
 
@@ -172,3 +176,56 @@ def test_an_unknown_query_is_an_error_and_not_an_empty_answer():
 
 def test_the_vendored_copy_is_valid_json():
     json.loads(operations.MATRIX.read_text())
+
+
+def test_a_clickbench_declaration_matches_what_the_pandas_port_calls():
+    # The first version of this table was read off the published SQL because the port
+    # did not exist. These three are where the two readings disagreed, so they are the
+    # ones worth pinning: q1 sums a boolean mask instead of filtering and counting,
+    # q28 replaces with a backreference instead of extracting, and q34 is q33 because
+    # its constant column goes on the ten rows that survive the limit.
+    assert operations.declared("clickbench", "q1") == ("Series.sum",)
+    assert "str.replace" in operations.declared("clickbench", "q28")
+    assert "str.extract" not in operations.declared("clickbench", "q28")
+    assert operations.declared("clickbench", "q34") == operations.declared("clickbench", "q33")
+
+
+def test_the_limit_is_a_slice_everywhere_except_the_one_query_with_no_ordering():
+    # Every other limit in the suite goes through one helper that takes an offset, so
+    # it slices whether or not the query has one. q17 is the only query with a limit
+    # and no order by, it goes through a different helper, and that helper takes a
+    # head. Declaring head on all of them would describe a port nobody wrote.
+    for query in query_registry.for_suite("clickbench"):
+        names = operations.declared("clickbench", query.name)
+        if query.name == "q17":
+            assert "DataFrame.head" in names
+        else:
+            assert "DataFrame.head" not in names
+
+
+def test_an_operation_measured_by_its_neighbour_is_in_neither_list():
+    # Covered, so not a hole. Not measured, so not the same claim as the rest of the
+    # covered set. A table that folded these into either side would be saying
+    # something it does not know.
+    split = operations.coverage()
+    for name in operations.MEASURED_NEARBY:
+        assert name in split["covered"]
+        assert name not in split["missing"]
+
+
+def test_the_neighbour_rows_say_what_they_measure_instead(capsys):
+    assert operations.main([]) == 0
+    printed = capsys.readouterr().out
+    assert "Rows that measure the neighbour of what a query runs" in printed
+    for name, reason in operations.MEASURED_NEARBY.items():
+        assert f"{name}: {reason}" in printed
+        assert len(reason) > 80, f"{name} is called a neighbour without saying of what"
+
+
+def test_only_a_query_that_runs_one_reports_a_neighbour():
+    assert operations.nearby(operations.declared("clickbench", "q27")) == ["str.len"]
+    assert operations.nearby(operations.declared("clickbench", "q28")) == [
+        "str.replace",
+        "str.len",
+    ]
+    assert operations.nearby(operations.declared("db-benchmark", "q1")) == []
