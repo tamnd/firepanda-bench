@@ -4,6 +4,10 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+## v0.4.2
+
+A patch. No published number changes and there is a new one that was never published before, which is what an engine pays to get the table into memory at all.
+
 ### What the load costs is measured on its own
 
 Every other number in this repository is a query, and on the hits table the load is the largest allocation any engine makes. The peak resident set a timed run reports is the high water mark of the whole process, so the load is buried inside it rather than reported by it. `pixi run load-memory --size 1M` runs each engine in a process of its own, times nothing but the load, and prints what each one peaked at and what it had already allocated before it opened the file.
