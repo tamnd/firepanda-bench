@@ -4,6 +4,10 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+## v0.4.4
+
+A patch. No published number changes and there is one new measurement, which is what firepanda's own planner costs against the same 43 queries written by hand.
+
 ### What a planner costs on ClickBench is measured against the same queries by hand
 
 `pixi run clickbench-planner --size 1M` runs all 43 twice in the firepanda driver over the same loaded table, once as the hand written port and once as the published SQL text through firepanda's own front end, with parsing and planning inside the timed region. One process per query per route, and the answers are compared before the times are.
