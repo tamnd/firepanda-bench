@@ -4,6 +4,10 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+## v0.4.5
+
+A patch. Nothing in the harness changed and no published engine number moves. One measurement was taken again because firepanda got better at SQL underneath it.
+
 ### The planner pair is measured again now that a date literal binds
 
 tamnd/firepanda#680 landed, so a date column compares against a bound written as a string, and five more of the 43 go through the planner than did when this pair was last published. 38 of the 43 now run both ways and the two routes agree on all 38. The hand written total is 321.7 ms and the planner total is 601.9 ms, a factor of 1.87, up from 1.67 over the 33 that ran before.
