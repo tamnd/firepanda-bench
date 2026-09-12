@@ -29,6 +29,15 @@ harder arithmetic. The report says so beside the table.
 Dates arrive as they are, a day count since the epoch, which is what Arrow calls
 date32 and what Polars and DuckDB both hold. The literals below are therefore
 day numbers, and `day` is where each one is written out with the date it means.
+
+The third thing, which is about the queries rather than the loading: every table
+is cut down to the columns the query reads before it goes into a join, and an
+order by with a small limit on it is written as a top n. Polars gets both of
+those from its optimizer and DuckDB from its planner, and the pandas queries in
+`tools/engines` do both by hand for the same reason these do, which is that
+neither pandas nor the firepanda frame API has anywhere to put an optimizer. A
+join that carries `c_comment` through a million and a half rows nobody asked for
+it in is measuring the wrong thing.
 """
 
 from firepanda.array.any import AnyArray
@@ -701,21 +710,44 @@ def q2(ref tables: Tpch) raises -> DataFrame:
     Raises:
         As the operations it runs do.
     """
+    var region_want: List[String] = ["r_regionkey"]
+    var europe = _keep(
+        tables.region,
+        region_want,
+        _cmp(tables.region, "r_name", BinaryOp.EQ, Value(String("EUROPE"))),
+    )
+    var nation_want: List[String] = ["n_nationkey", "n_regionkey", "n_name"]
+    var nations = tables.nation.select(nation_want^)
     var region_key: List[String] = ["r_regionkey"]
     var nation_key: List[String] = ["n_regionkey"]
-    var europe = tables.region.filter(
-        _cmp(tables.region, "r_name", BinaryOp.EQ, Value(String("EUROPE")))
-    ).join_on(tables.nation, region_key^, nation_key^)
+    europe = europe.join_on(nations, region_key^, nation_key^)
+    var supplier_want: List[String] = [
+        "s_suppkey",
+        "s_nationkey",
+        "s_acctbal",
+        "s_name",
+        "s_address",
+        "s_phone",
+        "s_comment",
+    ]
+    var sellers = tables.supplier.select(supplier_want^)
     var nation_id: List[String] = ["n_nationkey"]
     var supplier_nation: List[String] = ["s_nationkey"]
-    europe = europe.join_on(tables.supplier, nation_id^, supplier_nation^)
+    europe = europe.join_on(sellers, nation_id^, supplier_nation^)
+    var stock_want: List[String] = [
+        "ps_partkey",
+        "ps_suppkey",
+        "ps_supplycost",
+    ]
+    var stock = tables.partsupp.select(stock_want^)
     var supplier_id: List[String] = ["s_suppkey"]
     var partsupp_supplier: List[String] = ["ps_suppkey"]
-    europe = europe.join_on(tables.partsupp, supplier_id^, partsupp_supplier^)
+    europe = europe.join_on(stock, supplier_id^, partsupp_supplier^)
 
     var sized = _cmp(tables.part, "p_size", BinaryOp.EQ, Value(Int32(15)))
     var brass = tables.part.column("p_type").str_ends_with("BRASS")
-    var wanted = tables.part.filter(_both(sized, brass))
+    var part_want: List[String] = ["p_partkey", "p_mfgr"]
+    var wanted = _keep(tables.part, part_want, _both(sized, brass))
 
     var partsupp_part: List[String] = ["ps_partkey"]
     var part_id: List[String] = ["p_partkey"]
@@ -1267,9 +1299,13 @@ def q10(ref tables: Tpch) raises -> DataFrame:
         "c_phone",
         "c_comment",
     ]
-    var order: List[String] = ["revenue"]
-    var descending: List[Bool] = [True]
-    return _sorted(grouped.select(wantedcols^), order^, descending^).head(20)
+    # Twenty rows out of thirty seven thousand groups, so this is a top n and
+    # not a sort. Sorting first orders every group and then gathers all eight
+    # columns of all of them, four of which are text and one of which is the
+    # hundred character comment, to throw away all but twenty. `nlargest` ranks
+    # the one column and gathers twenty rows. DuckDB and Polars both turn an
+    # order by with a limit on it into the same operator.
+    return grouped.select(wantedcols^).nlargest("revenue", 20)
 
 
 def q11(ref tables: Tpch) raises -> DataFrame:
@@ -1406,9 +1442,14 @@ def q13(ref tables: Tpch) raises -> DataFrame:
             )
         ),
     )
+    # The only thing the query wants from a customer is that it exists and what
+    # its key is. Joining the whole table carries five text columns through an
+    # outer join that answers a million and a half rows.
+    var customer_want: List[String] = ["c_custkey"]
+    var customers = tables.customer.select(customer_want^)
     var custkey: List[String] = ["c_custkey"]
     var ordercust: List[String] = ["o_custkey"]
-    var placed = tables.customer.join_on(
+    var placed = customers.join_on(
         ordinary, custkey^, ordercust^, JoinKind.LEFT
     )
     var by: List[String] = ["c_custkey"]
@@ -1446,9 +1487,11 @@ def q14(ref tables: Tpch) raises -> DataFrame:
         "l_discount",
     ]
     var lines = _keep(tables.lineitem, line_want, month)
+    var part_want: List[String] = ["p_partkey", "p_type"]
+    var parts = tables.part.select(part_want^)
     var linepart: List[String] = ["l_partkey"]
     var partkey: List[String] = ["p_partkey"]
-    var joined = lines.join_on(tables.part, linepart^, partkey^)
+    var joined = lines.join_on(parts, linepart^, partkey^)
     var revenue = _discounted(joined, "revenue")
     var promo = joined.column("p_type").str_starts_with("PROMO")
     var only_promo = revenue.pick(promo, _zeros(joined.rows))
@@ -1538,13 +1581,21 @@ def q16(ref tables: Tpch) raises -> DataFrame:
     )
     var sizes: List[Int] = [49, 14, 23, 45, 19, 3, 36, 9]
     var wanted_size = tables.part.column("p_size").is_in(_int32s(sizes^))
-    var wanted = tables.part.filter(
-        _both(_both(brands, types), wanted_size)
+    var part_want: List[String] = [
+        "p_partkey",
+        "p_brand",
+        "p_type",
+        "p_size",
+    ]
+    var wanted = _keep(
+        tables.part, part_want, _both(_both(brands, types), wanted_size)
     )
 
+    var stock_want: List[String] = ["ps_partkey", "ps_suppkey"]
+    var stock = tables.partsupp.select(stock_want^)
     var partkey: List[String] = ["p_partkey"]
     var partsupp_part: List[String] = ["ps_partkey"]
-    var offered = wanted.join_on(tables.partsupp, partkey^, partsupp_part^)
+    var offered = wanted.join_on(stock, partkey^, partsupp_part^)
     var partsupp_supplier: List[String] = ["ps_suppkey"]
     var supplier_id: List[String] = ["s_suppkey"]
     offered = offered.join_on(
@@ -1851,9 +1902,11 @@ def q20(ref tables: Tpch) raises -> DataFrame:
     ).rename("threshold")
     per_pair = per_pair.with_column(threshold^)
 
+    var stock_want: List[String] = ["ps_partkey", "ps_suppkey", "ps_availqty"]
+    var stock = tables.partsupp.select(stock_want^)
     var partsupp_part: List[String] = ["ps_partkey"]
     var partkey: List[String] = ["p_partkey"]
-    var candidates = tables.partsupp.join_on(forest, partsupp_part^, partkey^)
+    var candidates = stock.join_on(forest, partsupp_part^, partkey^)
     var left_pair: List[String] = ["ps_partkey", "ps_suppkey"]
     var right_pair: List[String] = ["l_partkey", "l_suppkey"]
     candidates = candidates.join_on(per_pair, left_pair^, right_pair^)
@@ -1863,14 +1916,25 @@ def q20(ref tables: Tpch) raises -> DataFrame:
     var supplier_keep: List[String] = ["ps_suppkey"]
     candidates = candidates.select(supplier_keep^).drop_duplicates()
 
+    # One nation survives, so selecting it before the join makes this a probe
+    # against a single row rather than a filter over the join output, the same
+    # trick q11 uses on Germany.
+    var canada_want: List[String] = ["n_nationkey"]
+    var canada = _keep(
+        tables.nation,
+        canada_want,
+        _cmp(tables.nation, "n_name", BinaryOp.EQ, Value(String("CANADA"))),
+    )
+    var supplier_want: List[String] = [
+        "s_suppkey",
+        "s_nationkey",
+        "s_name",
+        "s_address",
+    ]
+    var sellers = tables.supplier.select(supplier_want^)
     var supp_nation: List[String] = ["s_nationkey"]
     var nation_id: List[String] = ["n_nationkey"]
-    var canadian = tables.supplier.join_on(
-        tables.nation, supp_nation^, nation_id^
-    )
-    canadian = canadian.filter(
-        _cmp(canadian, "n_name", BinaryOp.EQ, Value(String("CANADA")))
-    )
+    var canadian = sellers.join_on(canada, supp_nation^, nation_id^)
     var supplier_id: List[String] = ["s_suppkey"]
     var candidate_key: List[String] = ["ps_suppkey"]
     canadian = canadian.join_on(
