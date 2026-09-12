@@ -4,6 +4,16 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### The planner pair is measured again now that a date literal binds
+
+tamnd/firepanda#680 landed, so a date column compares against a bound written as a string, and five more of the 43 go through the planner than did when this pair was last published. 38 of the 43 now run both ways and the two routes agree on all 38. The hand written total is 321.7 ms and the planner total is 601.9 ms, a factor of 1.87, up from 1.67 over the 33 that ran before.
+
+The five that were added are the worst group in the table: 44.9 ms by hand against 131.7, a factor of 2.9, where the other 33 come to 1.70, which is the whole of the move from 1.67. All five filter hard before grouping and the predicate order is not the problem, since the pushdown already puts the equality against a constant first in all five. It is that each conjunct becomes a physical filter of its own and copies the rows that survived it, so six predicates means six gathers where the hand written port builds one mask and gathers once. That is tamnd/firepanda#521.
+
+The five still refused are q18 for EXTRACT and q42 for DATE_TRUNC, q27 for STRLEN, and q28 and q39 for naming a select alias in their GROUP BY.
+
+This pass also happens to be the clearest evidence yet that the ratio is the number and the milliseconds are the machine's mood. It was taken twice within the hour, once with something else using the laptop and once with the laptop to itself. Each side moved by 40 percent and the ratio moved from 1.84 to 1.87.
+
 ## v0.4.4
 
 A patch. No published number changes and there is one new measurement, which is what firepanda's own planner costs against the same 43 queries written by hand.
