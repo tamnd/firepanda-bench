@@ -4,6 +4,18 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### TPC-H at SF10, all four engines, and the memory ceiling it found
+
+Sixty million line items on the 13900K, three runs per pairing, memory io mode. All four engines answer all twenty two queries. firepanda's row count and exact answer digest match pandas' and DuckDB's on every one, and Polars' digest differs on q3, q15 and q19, which are revenue sums and a summation order difference in the last bits, the same three way split SF1 shows on four queries.
+
+On the suite total firepanda is first: 5.18 s against Polars' 7.06, DuckDB's 10.17 and pandas' 98.25, so 1.36x Polars and 1.96x DuckDB, and it does it on the least CPU of the three fast engines, 83.3 s against 113.9 and 251.5. On a geometric mean over the queries, which is what the README tables report, Polars is very slightly ahead, 15.96x pandas against firepanda's 15.19x. Both statements are true and they disagree because firepanda wins the expensive queries and loses a lot of cheap ones. It is fastest on q1, q7, q11, q13, q15, q18, q20 and q21, which is where most of the suite's wall clock is, and it is behind Polars on fifteen of the twenty two.
+
+That is a different shape from SF1, where firepanda is fastest on nineteen of twenty two, and the reason is memory. firepanda peaked at 31.57 GB on a machine with 31 GB of RAM. Polars peaked at 21.05 GB, DuckDB at 22.44 and pandas at 25.45. So firepanda was the only engine in the run that did not fit, and the queries it lost are the lineitem heavy ones where it was paging while the others were not. The per query firepanda times at SF10 should be read as an upper bound.
+
+The cause is not the queries and no query rewrite will move it. firepanda reads Parquet by handing the file to DuckDB, so it holds DuckDB's copy of the table and its own at the same time, and the peak is reached during the load rather than during the query. Staged measurement at SF1 put the floor at DuckDB resident plus firepanda resident. The way out is a native reader, not a cheaper query.
+
+Two documentation things were settled to publish this. Q11's fraction, which the suite README has been flagging as an open question since before SF10 existed, follows DuckDB's own text: `tpch_queries()` is scale independent and hardcodes 0.0001 at every size, so all four engines compute the same filter and agree, though a reading that scaled the fraction by the scale factor would select a tenth as many parts. And there is no published validation output above SF1, so `pixi run validate-tpch` stays at SF1 and the SF10 correctness claim is cross engine agreement rather than agreement with the TPC. Both are now written down in the suite README instead of being a note to check later.
+
 ### The firepanda TPC-H queries project before they join, and take a top n instead of sorting
 
 Published firepanda numbers on TPC-H move. Six of the twenty two get faster and no other engine is touched, so any result file written before this is not comparable with one written after it on those six.
