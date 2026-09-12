@@ -84,20 +84,27 @@ M2c measured the same pair on TPC-H and got a factor of 4.8. ClickBench is the m
 
 | query | hand written | through the planner | ratio |
 | --- | --- | --- | --- |
-| q5, a count of distinct search phrases | 15.3 ms | 11.9 ms | 0.78 |
-| q8, a distinct count per region | 19.0 ms | 19.6 ms | 1.03 |
-| q16, a group by on a nearly unique key | 33.1 ms | 46.9 ms | 1.41 |
-| q34, a group by on URL with a constant beside it | 47.7 ms | 66.9 ms | 1.40 |
-| q29, ninety sums over one column | 10.6 ms | 80.5 ms | 7.56 |
-| the 29 both routes run | 383.4 ms | 619.2 ms | 1.62 |
+| q22, two LIKE predicates and a distinct count | 10.4 ms | 9.0 ms | 0.87 |
+| q16, a group by on a nearly unique key | 23.8 ms | 27.9 ms | 1.17 |
+| q34, a group by on URL with a constant beside it | 46.9 ms | 64.4 ms | 1.37 |
+| q33, a group by on URL | 27.8 ms | 71.0 ms | 2.56 |
+| q29, ninety sums over one column | 9.2 ms | 50.9 ms | 5.53 |
+| q23, all 105 columns behind a LIKE, ten rows out | 4.8 ms | 35.8 ms | 7.50 |
+| the 33 both routes run | 326.4 ms | 543.9 ms | 1.67 |
 
-At 1M on the M4 laptop, five runs per query per route, median of the five, so read the ratios and not the milliseconds. The two routes agree on all 29, checked on the row count, the sum of every numeric column and an order independent hash of every text column, which is the same fingerprint the cross engine check uses.
+At 1M on the M4 laptop, five runs per query per route, median of the five. The two routes agree on all 33, checked on the row count, the sum of every numeric column and an order independent hash of every text column, which is the same fingerprint the cross engine check uses.
 
-29 of the 43 run both ways. The other 14 are refusals from the SQL layer rather than slow answers, and they are left out of both totals, because a total over a different set of queries on each side is not a comparison. Four of them want LIKE, seven compare a date column against a string literal, one wants EXTRACT, which is tamnd/firepanda#304, and one wants STRLEN. The fourteenth is q28, which the hand written port refuses as well for want of a regular expression engine, and which the planner refuses a step earlier than that, at the alias its GROUP BY names.
+Read the ratio and not the milliseconds, and there is a measurement behind that rather than the usual caution. This pair was taken twice, once before the LIKE kernel landed and once after, on the same laptop hours apart. Over the 29 queries both passes ran, the totals fell from 383.4 and 619.2 to 300.8 and 486.3, which is about 22 percent off each side, and the ratio moved from 1.615 to 1.617. The laptop was doing something different, both routes felt it equally, and the ratio did not notice.
 
-A factor of 1.62 over 29 queries is the headline, and two rows say most of what is behind it. q29 is ninety adds and ninety sums over one column, which is the one query here that pays whatever a plan costs per intermediate column ninety times over, and which cost that is has not been run down yet. Take it out and the remaining 28 come to 372.8 ms by hand against 538.7 ms planned, which is 1.45, so one query out of 29 is worth 0.17 of the factor. q5 is the other end, the one query where the planner wins, and it is a reminder that the hand written route is somebody's choice of kernel rather than a lower bound.
+33 of the 43 run both ways. The other 10 are refusals from the SQL layer rather than slow answers, and they are left out of both totals, because a total over a different set of queries on each side is not a comparison. Seven compare a date column against a string literal, which is tamnd/firepanda#680, one wants EXTRACT, which is tamnd/firepanda#304, one wants STRLEN, which is tamnd/firepanda#679, and q28 is refused by both routes, by the planner at the alias its GROUP BY names and by the hand written port for want of a regular expression engine.
 
-The 15 queries the hand route answers in under ten milliseconds cost 52.4 ms by hand and 108.5 ms planned, and the 14 slower ones cost 330.9 ms against 510.8 ms. Planning is close to a fixed cost per query, a median of 3.9 ms here, so it accounts for nearly all of the gap on the fast queries and under a third of it on the slow ones. A fixed cost per query does not grow when the table does, so the same pair at 10M would flatter the planner, and that is worth knowing before anybody quotes the 1.62 at a size it was not measured at.
+Two queries carry 0.21 of the factor between them and both are worth naming, because neither is planner overhead.
+
+q23 is the one this suite was always going to find. It is `SELECT *` behind a LIKE with a limit of ten, so ninety five rows out of a million survive the filter and ten of those are the answer. The hand written port calls `filter_sort_limit`, which never builds the filtered frame; the plan filters, materializes 105 columns of survivors, sorts and then takes ten. That is 4.8 ms against 35.8, and it is a fusion the planner could do and does not do yet rather than a cost of planning.
+
+q29 is ninety adds and ninety sums over one column, 9.2 ms by hand against 50.9. It is the one query here that pays whatever a plan costs per intermediate column ninety times over, and which cost that is has not been run down. Set those two aside and the remaining 31 come to 1.46.
+
+Planning itself looks like a fixed cost per query, a median of 2.4 ms added. On the 20 queries that the hand route answers in under ten milliseconds and that are not those two, the gap is 40.2 ms over 69.6 ms of work, which is that fixed cost and almost nothing else. On the 11 the hand route takes longer than ten milliseconds over, the pair is 242.7 ms against 347.3, a factor of 1.43, and that part does scale with the query. A fixed cost per query does not grow when the table does, so the same pair at 10M would flatter the planner, and the 1.67 should not be quoted at a size it was not measured at.
 
 ## Three queries worth naming
 
