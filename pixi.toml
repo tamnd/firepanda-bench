@@ -98,6 +98,12 @@ check-sweep = "python tools/check_sweep.py"
 # inherit the first one's.
 load-memory = "python tools/clickbench_load.py"
 
+# What a group by adds on top of that load, for the two queries whose answer is
+# nearly as large as the table they read. The peak is taken after the load and
+# again after the query, so what a query allocated can be separated from what the
+# loader had already reached.
+group-memory = "python tools/clickbench_group_memory.py"
+
 # The chart is emitted as a Vega-Lite specification with the data inline and the
 # renderer loaded from a CDN, so this needs nothing that is not already installed.
 # It used to need altair and jinja2 in an environment of their own, which meant a

@@ -4,6 +4,16 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### What a group by adds on top of the load is measured too
+
+`pixi run group-memory --size 1M` is the sibling of `load-memory`. It loads the hits table, reads the peak resident set, runs q32 once and reads the peak again, one process per engine, and reports the difference. q32 groups by `WatchID` and `ClientIP` with no filter, so the answer has close to one row per row of input, and that is the one shape in the suite where a group by is an allocation question rather than a throughput one.
+
+The difference between the two readings is the only part of a process peak that can be attributed to a query. A peak never falls, so comparing the raw peaks would mostly compare the loaders, which `load-memory` already does on purpose.
+
+At 1M the group by adds 0.15 GB for pandas and 0.11 GB for duckdb, and nothing measurable for firepanda and polars. Those two zeros are bounds rather than measurements, because both engines' loads reached higher than anything their query did, and that is said in the table rather than left to be read as a group by that costs nothing. What a zero does rule out is a second copy of the table, which would have been a gigabyte and would have shown. The size that would settle it is 10M, and it does not fit on the laptop these were taken on, so it waits on tamnd/firepanda#427 or on the bench machines.
+
+The driver now prints `peak_rss_after_load_bytes` next to the peak it already printed, which is where the first of the two readings comes from. It costs nothing, since the driver was already reading the process facts at that point and reporting only the current resident set out of them, which is zero on a platform with no `/proc`.
+
 ## v0.4.2
 
 A patch. No published number changes and there is a new one that was never published before, which is what an engine pays to get the table into memory at all.

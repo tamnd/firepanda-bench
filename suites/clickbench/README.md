@@ -59,6 +59,23 @@ Measured on the M4 laptop, which is not a publication machine, so read the ratio
 
 firepanda is 4.3 times the payload and pandas is 1.5. The reason is the path rather than the frame: firepanda has no Parquet decoder, so DuckDB decodes the file into its own vectors, hands them over as Arrow, and firepanda copies out of that into its own arrays, which is three representations of the same table with at least two of them resident at once. This is the number tamnd/firepanda#478 asked to have written down and it is the one the milestone is most likely to move.
 
+## What the group by adds on top of the load
+
+q32 groups by `WatchID` and `ClientIP` with no filter, so the answer has close to one row per row of input and the group by is an allocation question rather than a throughput one. `pixi run group-memory --size 1M` loads the table, reads the peak, runs the query once and reads the peak again, one process per engine. The difference between the two readings is what the query added above the high water mark the load had already reached, which is the only part of a process peak that can be attributed to a query at all.
+
+| engine | query | peak after the load | peak at the end | added by the group by |
+| --- | --- | --- | --- | --- |
+| firepanda | 0.03 s | 3.22 GB | 3.22 GB | 0.00 GB |
+| pandas | 0.10 s | 1.32 GB | 1.47 GB | 0.15 GB |
+| polars | 0.05 s | 2.43 GB | 2.43 GB | 0.00 GB |
+| duckdb | 0.02 s | 1.36 GB | 1.47 GB | 0.11 GB |
+
+Two of those zeros are bounds and not measurements. A peak never falls, so an engine whose load reached higher than anything the query does reports a zero here no matter what the query allocated underneath it, and that is what firepanda and Polars are doing. What the zero does rule out is the thing worth ruling out: neither engine allocates a second copy of the table to group it, because either would have been a gigabyte and would have shown.
+
+pandas and DuckDB are measurements, and both are about what the answer weighs. A hundred and fifty megabytes for a million groups of five columns is the answer and its intermediate, which is the shape to expect.
+
+The size that would settle it is 10M, where the group by is ten times this and the loads are not all above it. That run does not fit on the M4 laptop, because firepanda's loader is 4.3 times the payload and ten million rows of it is more memory than the machine has, so it waits on tamnd/firepanda#427 or on the bench machines. q31 is the same query behind a filter and reads the same way: 0.17 GB for pandas, 0.05 GB for DuckDB, and the same two bounds.
+
 ## Three queries worth naming
 
 **q31 and q32 group by a key that is nearly unique.** `WatchID` at a hundred million rows means almost every group has a count of one, and a group by kernel that is fine on a hundred groups and fine on a million can still fall over here. This is the reason firepanda has its own hash table rather than Mojo's dictionary, and it is the only place in this repository where that claim is tested at this scale. They are also the two queries whose answers the statements determine least, which is the fourth trap below: at 1M, q31 has 69,354 rows tied at the cut and q32 has all of them.
