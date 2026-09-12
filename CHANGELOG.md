@@ -4,6 +4,20 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### What a planner costs on ClickBench is measured against the same queries by hand
+
+`pixi run clickbench-planner --size 1M` runs all 43 twice in the firepanda driver over the same loaded table, once as the hand written port and once as the published SQL text through firepanda's own front end, with parsing and planning inside the timed region. One process per query per route, and the answers are compared before the times are.
+
+29 of the 43 run both ways and the two routes agree on all 29, on the row count, the sum of every numeric column and an order independent hash of every text column. The hand written total is 383.4 ms and the planner total is 619.2 ms, a factor of 1.62, at 1M on the M4 laptop with five runs per query per route. TPC-H measured the same pair at 4.8, and this suite has no joins in it at all, so everything a planner does about join order and build sides is inert here and what is left is the projection, the predicate order and the sort.
+
+The other 14 are refusals from the SQL layer and are left out of both totals rather than counted as slow, because a total over a different set of queries on each side is not a comparison. Four want LIKE, seven compare a date column against a string literal, one wants EXTRACT, one wants STRLEN, and q28 is refused by both routes.
+
+One query carries 0.17 of the factor on its own. q29 is ninety adds and ninety sums over one column, the planner route takes 80.5 ms against 10.6 by hand, and without it the remaining 28 come to 1.45. The other thing worth carrying forward is that planning looks like a fixed cost per query, a median of 3.9 ms, which is nearly the whole gap on the 15 queries the hand route answers in under ten milliseconds and under a third of it on the 14 slower ones. A fixed cost does not grow when the table does, so the same pair at a larger size would flatter the planner.
+
+The driver takes a `--statements` flag pointing at the vendored `queries.sql`, so the planner route reads the same file the other three engines read rather than a copy compiled into it.
+
+Closes tamnd/firepanda#485.
+
 ## v0.4.3
 
 A patch. No published number changes and there is one new measurement, which is what a group by costs in memory when its answer is nearly as large as the table it read.
