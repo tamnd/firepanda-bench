@@ -1572,6 +1572,12 @@ def main() raises:
         )
         return
     var load_ns = perf_counter_ns() - load_start
+    # Both readings are reported. The current resident set says what the table
+    # occupies and is zero on a platform with no `/proc`, and the peak is the
+    # high water mark of everything up to here, which is the only one of the two
+    # that can be subtracted from the peak at the end to say what the query added
+    # above the load. On the hits table the load is the larger of the two often
+    # enough that a peak with no load reading beside it cannot be attributed.
     var loaded = read_process_facts()
 
     var cpu_before = read_usage()
@@ -1751,6 +1757,8 @@ def main() raises:
             hashes,
             ', "peak_rss_bytes": ',
             after.peak_rss_bytes,
+            ', "peak_rss_after_load_bytes": ',
+            loaded.peak_rss_bytes,
             ', "rss_before_load_bytes": ',
             before.rss_bytes,
             ', "rss_after_load_bytes": ',
