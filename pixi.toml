@@ -92,6 +92,12 @@ validate-results = "python tools/validate_results.py"
 # every single row gets looked at by a human before it goes out.
 check-sweep = "python tools/check_sweep.py"
 
+# What it costs each engine to get the 105 column hits table into memory, with
+# nothing timed but the load. One process per engine, because a peak resident set
+# is a per process high water mark and the engine measured second would otherwise
+# inherit the first one's.
+load-memory = "python tools/clickbench_load.py"
+
 # The chart is emitted as a Vega-Lite specification with the data inline and the
 # renderer loaded from a CDN, so this needs nothing that is not already installed.
 # It used to need altair and jinja2 in an environment of their own, which meant a

@@ -4,6 +4,24 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### What the load costs is measured on its own
+
+Every other number in this repository is a query, and on the hits table the load is the largest allocation any engine makes. The peak resident set a timed run reports is the high water mark of the whole process, so the load is buried inside it rather than reported by it. `pixi run load-memory --size 1M` runs each engine in a process of its own, times nothing but the load, and prints what each one peaked at and what it had already allocated before it opened the file.
+
+At 1M the payload is 0.73 GB of Arrow once the three conversions have been applied. firepanda peaks at 3.16 GB, polars at 2.43, duckdb at 1.31 and pandas at 1.23. firepanda is 4.3 times the payload against pandas' 1.5, and the reason is the path rather than the frame: firepanda has no Parquet decoder, so DuckDB decodes the file into its own vectors, hands them over as Arrow, and firepanda copies out of that into its own arrays, which is three representations of one table with at least two of them resident at once. The table is in `suites/clickbench/README.md` and the finding belongs to tamnd/firepanda#405.
+
+### The driver says what it loaded
+
+`--schema=clickbench` loads the table, prints all 105 column names and types on one JSON line along with the load time and the peak, and stops. That is what the load measurement reads, and it is also what `tests/test_clickbench_schema.py` checks the driver against column by column, with the expected schema read out of the file's own footer rather than transcribed into the test.
+
+The 28 text columns are why that test exists. The file stores them as BYTE_ARRAY with no logical type on them, nine of the 43 queries read one, and an engine that leaves them as bytes does not fail: it matches nothing, returns an empty answer and reports it as a result. `check_text` guards that at load time for the three Python engines, and firepanda is a separate binary that cannot call it. All 105 columns arrive at the published types today, so this is a guard rather than a fix.
+
+`published_type` and `published_schema` in `tools/clickbench.py` hold the three conversions ClickBench's own loader makes, and `retype` goes through the first of them, so the function that converts the data and the function that says what the data should be cannot drift apart.
+
+Closes tamnd/firepanda#478.
+
+In #78.
+
 ## v0.4.1
 
 A patch. Nothing here changes what a published number means, and one number got a lot better.

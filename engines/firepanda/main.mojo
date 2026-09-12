@@ -1454,12 +1454,75 @@ def print_clickbench_support() raises:
     )
 
 
+def print_clickbench_schema(path: String) raises:
+    """Loads the hits table and prints the schema it arrived with, and nothing
+    else.
+
+    The hits schema is 105 columns of unsigned 8, 16, 32 and 64 bit integers,
+    signed 16 and 32, a date, three timestamps and a lot of text that the file
+    stores as bytes with no logical type on it. Nine of the 43 queries read a
+    text column and every one of them would quietly match nothing if the bytes
+    arrived as bytes, so whether the import is faithful is a correctness
+    question and not a presentation one. There was no way to ask the driver
+    what it ended up holding, so the only way to find out was to read a query's
+    answer and infer backwards from it.
+
+    Loading is the whole measurement here, which is why the peak resident set is
+    printed beside the schema. On this table the load is the largest allocation
+    the driver ever makes and nothing in the timed runs comes close to it, so
+    this is the number to watch rather than any query's.
+
+    Args:
+        path: The file, or the glob over the partitions.
+
+    Raises:
+        Error: If the table cannot be read, or as printing does.
+    """
+    var load_start = perf_counter_ns()
+    var hits = load_clickbench(path)
+    var load_ns = perf_counter_ns() - load_start
+    var after = read_process_facts()
+
+    var columns = String("[")
+    for i in range(len(hits.schema)):
+        if i > 0:
+            columns += ", "
+        columns += String(
+            '{"name": ',
+            json_string(hits.schema[i].name),
+            ', "type": ',
+            json_string(String(hits.schema[i].dtype)),
+            "}",
+        )
+    columns += "]"
+
+    print(
+        String(
+            '{"ok": true, "suite": "clickbench", "rows": ',
+            len(hits),
+            ', "columns": ',
+            columns,
+            ', "load_s": ',
+            json_number(Float64(load_ns) / 1e9),
+            ', "peak_rss_bytes": ',
+            after.peak_rss_bytes,
+            "}",
+        )
+    )
+
+
 def main() raises:
     """Runs one query and prints one line of JSON."""
     # Asked before anything else, because this mode answers about the driver and
     # loads no data at all.
     if flag("list", "") == "clickbench":
         print_clickbench_support()
+        return
+
+    # Loads the table and then stops, so that what the schema mode reports is
+    # the load and nothing a query did afterwards.
+    if flag("schema", "") == "clickbench":
+        print_clickbench_schema(flag("path", ""))
         return
 
     var query = flag("query", "q4")
