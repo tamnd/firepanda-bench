@@ -4,6 +4,14 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### The firepanda TPC-H filters hand all their comparisons over at once
+
+A filter with several comparisons in it used to and them together two at a time, which is what the engine's `logical_and` gives you. Every one of those pairwise calls writes a whole mask column so the next call can read it straight back, and on six million line items a byte a row is six megabytes that nobody asked for. q6 has five predicates, so four of those columns, and the four writes and eight reads cost more than the five comparisons that produced them did.
+
+firepanda grew a `conjoin` that takes any number of masks and makes one pass over all of them, so the queries now hand the whole list over at once. q6, q12, q16 and q19 do this, and q19 does it twice because its part side has four predicates of its own. Polars fuses a conjunction the same way and DuckDB evaluates a conjunctive filter as a line of selections over a narrowing selection vector, so neither of them writes those columns either.
+
+Measured on the 13900K at SF1 as five alternations of before and after, fifteen runs each, with q1 and q11 in the run as untouched controls to size the noise. q6 goes from 10.3 ms to 8.3 ms, 1.24x, and an earlier looser run put it at 1.38x, so somewhere between the two. q12 goes from 18.1 ms to 16.6 ms, 1.09x, which is small but it came out at 1.10x in the earlier run as well and two independent runs agreeing is worth more than either alone. q16 at 1.03x and q19 at 1.05x are inside the noise this run measured, the controls having drifted between 0.950x and 0.999x, so they are the right direction and nothing more can be said from this data. Peak resident set does not move on any of them, because the mask columns were never the peak.
+
 ### TPC-H at SF10, all four engines, and the memory ceiling it found
 
 Sixty million line items on the 13900K, three runs per pairing, memory io mode. All four engines answer all twenty two queries. firepanda's row count and exact answer digest match pandas' and DuckDB's on every one, and Polars' digest differs on q3, q15 and q19, which are revenue sums and a summation order difference in the last bits, the same three way split SF1 shows on four queries.
