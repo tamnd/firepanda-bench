@@ -38,6 +38,14 @@ those from its optimizer and DuckDB from its planner, and the pandas queries in
 neither pandas nor the firepanda frame API has anywhere to put an optimizer. A
 join that carries `c_comment` through a million and a half rows nobody asked for
 it in is measuring the wrong thing.
+
+The fourth, which is the same idea applied to the predicates: a filter with
+several comparisons in it hands all of them to `_all` at once rather than anding
+them together two at a time. Each pairwise and writes a whole mask column for
+the next one to read straight back, and on six million rows that column costs
+more than the comparison that produced it did. Polars fuses a conjunction into
+one pass and DuckDB evaluates a conjunctive filter as a line of selections over
+a narrowing selection vector, so neither of them writes those columns either.
 """
 
 from firepanda.array.any import AnyArray
@@ -51,6 +59,7 @@ from firepanda.frame.series import Series
 from firepanda.io.parquet import Session
 from firepanda.join import JoinKind
 from firepanda.kernel import (
+    conjoin,
     filter_any,
     is_in_any,
     logical_and,
@@ -278,6 +287,26 @@ def _either(
         As `logical_or` does.
     """
     return logical_or(a, b)
+
+
+def _all(var masks: List[Array[DType.bool]]) raises -> Array[DType.bool]:
+    """Ands several masks together in one pass.
+
+    `_both` twice is two passes and an intermediate mask column written down for
+    the second call to read straight back. On six million rows that column costs
+    more than the comparison that produced it did, and a query with five
+    predicates in it writes four of them. This is one pass over all of them.
+
+    Args:
+        masks: The masks, all the same length. Consumed.
+
+    Returns:
+        The rows every one of them is true on.
+
+    Raises:
+        As `conjoin` does.
+    """
+    return conjoin(masks)
 
 
 def _mask(var series: Series) raises -> Array[DType.bool]:
@@ -955,19 +984,20 @@ def q6(ref tables: Tpch) raises -> DataFrame:
         As the operations it runs do.
     """
     ref lineitem = tables.lineitem
-    var shipped = _both(
-        _cmp(lineitem, "l_shipdate", BinaryOp.GE, day(1994, 1, 1)),
-        _cmp(lineitem, "l_shipdate", BinaryOp.LT, day(1995, 1, 1)),
+    var masks = List[Array[DType.bool]](capacity=5)
+    masks.append(_cmp(lineitem, "l_shipdate", BinaryOp.GE, day(1994, 1, 1)))
+    masks.append(_cmp(lineitem, "l_shipdate", BinaryOp.LT, day(1995, 1, 1)))
+    masks.append(
+        _cmp(lineitem, "l_discount", BinaryOp.GE, Value(Float64(0.05)))
     )
-    var discounted = _both(
-        _cmp(lineitem, "l_discount", BinaryOp.GE, Value(Float64(0.05))),
-        _cmp(lineitem, "l_discount", BinaryOp.LE, Value(Float64(0.07))),
+    masks.append(
+        _cmp(lineitem, "l_discount", BinaryOp.LE, Value(Float64(0.07)))
     )
-    var small = _cmp(lineitem, "l_quantity", BinaryOp.LT, Value(Float64(24.0)))
+    masks.append(
+        _cmp(lineitem, "l_quantity", BinaryOp.LT, Value(Float64(24.0)))
+    )
     var want: List[String] = ["l_extendedprice", "l_discount"]
-    var kept = _keep(
-        lineitem, want, _both(_both(shipped, discounted), small)
-    )
+    var kept = _keep(lineitem, want, _all(masks^))
     var revenue = _product(kept, "l_extendedprice", "l_discount", "revenue")
     return _one("revenue", _reduced(revenue, AggKind.SUM))
 
@@ -1378,23 +1408,18 @@ def q12(ref tables: Tpch) raises -> DataFrame:
     # six million rows to keep about thirty thousand of them.
     ref lineitem = tables.lineitem
     var modes: List[String] = ["MAIL", "SHIP"]
-    var wanted = _in(lineitem, "l_shipmode", modes)
-    wanted = _both(
-        wanted,
-        _cmp2(lineitem, "l_commitdate", "l_receiptdate", BinaryOp.LT),
+    var masks = List[Array[DType.bool]](capacity=6)
+    masks.append(_in(lineitem, "l_shipmode", modes))
+    masks.append(_cmp2(lineitem, "l_commitdate", "l_receiptdate", BinaryOp.LT))
+    masks.append(_cmp2(lineitem, "l_shipdate", "l_commitdate", BinaryOp.LT))
+    masks.append(
+        _cmp(lineitem, "l_receiptdate", BinaryOp.GE, day(1994, 1, 1))
     )
-    wanted = _both(
-        wanted,
-        _cmp2(lineitem, "l_shipdate", "l_commitdate", BinaryOp.LT),
-    )
-    wanted = _both(
-        wanted, _cmp(lineitem, "l_receiptdate", BinaryOp.GE, day(1994, 1, 1))
-    )
-    wanted = _both(
-        wanted, _cmp(lineitem, "l_receiptdate", BinaryOp.LT, day(1995, 1, 1))
+    masks.append(
+        _cmp(lineitem, "l_receiptdate", BinaryOp.LT, day(1995, 1, 1))
     )
     var line_want: List[String] = ["l_orderkey", "l_shipmode"]
-    var lines = _keep(lineitem, line_want, wanted)
+    var lines = _keep(lineitem, line_want, _all(masks^))
     var order_want: List[String] = ["o_orderkey", "o_orderpriority"]
     var placed = tables.orders.select(order_want^)
     var orderkey: List[String] = ["o_orderkey"]
@@ -1588,7 +1613,7 @@ def q16(ref tables: Tpch) raises -> DataFrame:
         "p_size",
     ]
     var wanted = _keep(
-        tables.part, part_want, _both(_both(brands, types), wanted_size)
+        tables.part, part_want, _all([brands^, types^, wanted_size^])
     )
 
     var stock_want: List[String] = ["ps_partkey", "ps_suppkey"]
@@ -1765,23 +1790,21 @@ def q19(ref tables: Tpch) raises -> DataFrame:
         As the operations it runs do.
     """
     var modes: List[String] = ["AIR", "AIR REG"]
-    var narrow = _in(tables.lineitem, "l_shipmode", modes)
-    narrow = _both(
-        narrow,
+    var narrow = List[Array[DType.bool]](capacity=4)
+    narrow.append(_in(tables.lineitem, "l_shipmode", modes))
+    narrow.append(
         _cmp(
             tables.lineitem,
             "l_shipinstruct",
             BinaryOp.EQ,
             Value(String("DELIVER IN PERSON")),
-        ),
+        )
     )
-    narrow = _both(
-        narrow,
-        _cmp(tables.lineitem, "l_quantity", BinaryOp.GE, Value(Float64(1.0))),
+    narrow.append(
+        _cmp(tables.lineitem, "l_quantity", BinaryOp.GE, Value(Float64(1.0)))
     )
-    narrow = _both(
-        narrow,
-        _cmp(tables.lineitem, "l_quantity", BinaryOp.LE, Value(Float64(30.0))),
+    narrow.append(
+        _cmp(tables.lineitem, "l_quantity", BinaryOp.LE, Value(Float64(30.0)))
     )
     var line_want: List[String] = [
         "l_partkey",
@@ -1789,7 +1812,7 @@ def q19(ref tables: Tpch) raises -> DataFrame:
         "l_extendedprice",
         "l_discount",
     ]
-    var lines = _keep(tables.lineitem, line_want, narrow)
+    var lines = _keep(tables.lineitem, line_want, _all(narrow^))
 
     var brands: List[String] = ["Brand#12", "Brand#23", "Brand#34"]
     var boxes: List[String] = [
@@ -1806,23 +1829,18 @@ def q19(ref tables: Tpch) raises -> DataFrame:
         "LG PACK",
         "LG PKG",
     ]
-    var wanted = _both(
-        _in(tables.part, "p_brand", brands),
-        _in(tables.part, "p_container", boxes),
-    )
-    wanted = _both(
-        wanted, _cmp(tables.part, "p_size", BinaryOp.GE, Value(Int32(1)))
-    )
-    wanted = _both(
-        wanted, _cmp(tables.part, "p_size", BinaryOp.LE, Value(Int32(15)))
-    )
+    var wanted = List[Array[DType.bool]](capacity=4)
+    wanted.append(_in(tables.part, "p_brand", brands))
+    wanted.append(_in(tables.part, "p_container", boxes))
+    wanted.append(_cmp(tables.part, "p_size", BinaryOp.GE, Value(Int32(1))))
+    wanted.append(_cmp(tables.part, "p_size", BinaryOp.LE, Value(Int32(15))))
     var part_want: List[String] = [
         "p_partkey",
         "p_brand",
         "p_container",
         "p_size",
     ]
-    var parts = _keep(tables.part, part_want, wanted)
+    var parts = _keep(tables.part, part_want, _all(wanted^))
 
     var linepart: List[String] = ["l_partkey"]
     var partkey: List[String] = ["p_partkey"]
