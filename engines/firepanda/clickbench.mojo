@@ -73,9 +73,84 @@ from firepanda.kernel.temporal import (
     temporal_field,
     temporal_round,
 )
+from firepanda.sql.catalog import Catalog
+from firepanda.sql.run import run
 
 comptime QUERY_COUNT = 43
 """How many queries ClickBench publishes, numbered q0 through q42."""
+
+
+def clickbench_statement(path: String, query: String) raises -> String:
+    """Reads one published statement out of the vendored file.
+
+    The file is one statement per line and they are in published order, so the
+    number in the query name is the line. Read rather than compiled in, because
+    the statement the planner is handed has to be the same bytes the other three
+    engines are handed, and a copy in this file is a copy that can drift.
+
+    Args:
+        path: Where `suites/clickbench/queries.sql` is.
+        query: The query name, `q0` through `q42`.
+
+    Returns:
+        The statement, with no trailing semicolon.
+
+    Raises:
+        Error: If the name is not a query number, or the file is short.
+    """
+    var index = Int(String(query[byte=1:]))
+    var text = String()
+    with open(path, "r") as handle:
+        text = handle.read()
+    var lines = text.split("\n")
+    var seen = 0
+    for line in lines:
+        var trimmed = String(String(line).strip())
+        if trimmed.byte_length() == 0:
+            continue
+        if seen == index:
+            if trimmed.endswith(";"):
+                return String(trimmed[byte = : trimmed.byte_length() - 1])
+            return trimmed
+        seen += 1
+    raise Error(
+        String(
+            "there is no statement ",
+            index,
+            " in ",
+            path,
+            ", which holds ",
+            seen,
+            " of them",
+        )
+    )
+
+
+def run_clickbench_sql(statement: String, catalog: Catalog) raises -> DataFrame:
+    """Runs one published statement through the SQL front end.
+
+    The other route through this file is the same 43 queries written against the
+    frame API with the projections tight and the predicates in an order somebody
+    chose. This one hands the planner the text and lets it choose, and the pair
+    of totals is what tamnd/firepanda#485 exists to measure.
+
+    Parsing and planning are inside the call rather than hoisted out of it, on
+    purpose. What is being measured is what a planner is worth, and a planner
+    that is not paid for is not being measured.
+
+    Args:
+        statement: The published statement.
+        catalog: The names the statement is allowed to say, holding `hits`.
+
+    Returns:
+        The answer frame.
+
+    Raises:
+        Error: If the statement is a shape the SQL layer does not run yet, which
+            is reported as a refusal rather than as a zero.
+    """
+    return run(statement, catalog)
+
 
 comptime REGEX_REFUSAL = String(
     "firepanda has no regular expression engine, so it cannot evaluate the",

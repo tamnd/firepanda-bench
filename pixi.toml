@@ -104,6 +104,12 @@ load-memory = "python tools/clickbench_load.py"
 # loader had already reached.
 group-memory = "python tools/clickbench_group_memory.py"
 
+# The same 43 queries twice, once as the hand written port and once as the SQL
+# text through the planner, so what a planner costs on this suite is a pair of
+# totals rather than an opinion. A query only reaches either total when both
+# routes ran it and both answered the same thing.
+clickbench-planner = "python tools/clickbench_planner.py"
+
 # The chart is emitted as a Vega-Lite specification with the data inline and the
 # renderer loaded from a CDN, so this needs nothing that is not already installed.
 # It used to need altair and jinja2 in an environment of their own, which meant a

@@ -66,12 +66,15 @@ from firepanda.io import ReadOptions, read_csv, read_csv_as
 from firepanda.io.write import write_csv
 from firepanda.join import JoinKind
 from firepanda.kernel import AggKind, multiply, subtract
+from firepanda.sql.catalog import Catalog
 
 from clickbench import (
     clickbench_refused,
+    clickbench_statement,
     clickbench_supported,
     load_clickbench,
     run_clickbench,
+    run_clickbench_sql,
 )
 from tpch import Tpch, load_tpch, run_tpch, table_names
 
@@ -1540,6 +1543,12 @@ def main() raises:
     # checked against the published validation output. The harness never sets
     # it, so nothing is written on a timed run.
     var answer_path = flag("answer", "")
+    # Where the published statements are, which puts the clickbench suite on the
+    # SQL front end instead of on the hand written frame code. The two routes
+    # answer the same 43 queries over the same loaded table, so the pair of
+    # totals is what a planner is worth on a workload with no joins in it. Unset
+    # is the hand written route, which is what the published table reports.
+    var statements = flag("statements", "")
 
     var before = read_process_facts()
 
@@ -1547,6 +1556,11 @@ def main() raises:
     var tables: Tables
     var tpch_tables = Tpch()
     var hits = DataFrame()
+    # Registered once, after the load and before the clock, because a catalog is
+    # a session and building one per run would charge the SQL route a table
+    # registration the hand written route does not pay.
+    var catalog = Catalog()
+    var statement = String()
     try:
         # An ingestion query loads nothing before it is timed. Opening the file
         # is the measurement, so anything done here would be work taken out of
@@ -1560,6 +1574,9 @@ def main() raises:
             tpch_tables = load_tpch(tpch_paths())
         if hitting:
             hits = load_clickbench(path)
+            if statements:
+                statement = clickbench_statement(statements, query)
+                catalog.register("hits", DataFrame(copy=hits))
     except error:
         print(
             String(
@@ -1624,6 +1641,8 @@ def main() raises:
                 answer = read_one(query, path)
             elif playing:
                 answer = run_tpch(query, tpch_tables)
+            elif hitting and statements:
+                answer = run_clickbench_sql(statement, catalog)
             elif hitting:
                 answer = run_clickbench(query, hits)
             else:

@@ -30,7 +30,7 @@ Three sizes exist. 100M is the published one, 99,997,497 rows, and the only size
 
 DuckDB, pandas and Polars run all 43. DuckDB runs the published SQL unmodified and the other two are ports, each written once against that text and compared against DuckDB's answer per query.
 
-firepanda runs none of the 43 and says so once rather than 43 times: it does not have a driver for this suite yet. That is issue #45 in this repository, and it is behind a firepanda that can read Parquet without handing the file to DuckDB, because DuckDB is one of the four engines in this table and an engine whose reader is another engine in the table is not being measured. When the driver lands it starts as a column of explicit refusals with a reason on each, the way TPC-H did, rather than as a missing column.
+firepanda runs 42 of the 43, hand written one function per query in `engines/firepanda/clickbench.mojo`, and refuses q28 by name with the reason on it rather than answering it with a zero, because q28 groups by a regular expression replacement and there is no regex engine yet. It runs in `memory` mode only, since it has no Parquet decoder of its own and an engine whose reader is another engine in this table is not being measured, so `--io scan` is refused by name rather than answered with a number. That was issue #45 here. Those same statements also run through firepanda's SQL front end instead of by hand, which is the pair further down.
 
 cuDF and MojoFrame are not in this suite. cuDF arrives with the GPU runner and MojoFrame has no ClickBench port published.
 
@@ -75,6 +75,29 @@ Two of those zeros are bounds and not measurements. A peak never falls, so an en
 pandas and DuckDB are measurements, and both are about what the answer weighs. A hundred and fifty megabytes for a million groups of five columns is the answer and its intermediate, which is the shape to expect.
 
 The size that would settle it is 10M, where the group by is ten times this and the loads are not all above it. That run does not fit on the M4 laptop, because firepanda's loader is 4.3 times the payload and ten million rows of it is more memory than the machine has, so it waits on tamnd/firepanda#427 or on the bench machines. q31 is the same query behind a filter and reads the same way: 0.17 GB for pandas, 0.05 GB for DuckDB, and the same two bounds.
+
+## What the planner costs, against the same queries written by hand
+
+The firepanda column in this suite is hand written, one function per query, with the projections tight and the predicates in an order somebody chose. The other route is the published SQL text handed to firepanda's own front end, parsed and planned inside the timed region. `pixi run clickbench-planner --size 1M` runs both, one process per query per route, and compares the answers before it compares the times.
+
+M2c measured the same pair on TPC-H and got a factor of 4.8. ClickBench is the more awkward half of that measurement, because there are no joins here: everything a planner does about join order, build sides and predicate transfer is inert on all 43, and what is left is reading three columns out of 105, applying the predicates in the order that discards the most rows soonest, and not computing a sort whose result is thrown away.
+
+| query | hand written | through the planner | ratio |
+| --- | --- | --- | --- |
+| q5, a count of distinct search phrases | 15.3 ms | 11.9 ms | 0.78 |
+| q8, a distinct count per region | 19.0 ms | 19.6 ms | 1.03 |
+| q16, a group by on a nearly unique key | 33.1 ms | 46.9 ms | 1.41 |
+| q34, a group by on URL with a constant beside it | 47.7 ms | 66.9 ms | 1.40 |
+| q29, ninety sums over one column | 10.6 ms | 80.5 ms | 7.56 |
+| the 29 both routes run | 383.4 ms | 619.2 ms | 1.62 |
+
+At 1M on the M4 laptop, five runs per query per route, median of the five, so read the ratios and not the milliseconds. The two routes agree on all 29, checked on the row count, the sum of every numeric column and an order independent hash of every text column, which is the same fingerprint the cross engine check uses.
+
+29 of the 43 run both ways. The other 14 are refusals from the SQL layer rather than slow answers, and they are left out of both totals, because a total over a different set of queries on each side is not a comparison. Four of them want LIKE, seven compare a date column against a string literal, one wants EXTRACT, which is tamnd/firepanda#304, and one wants STRLEN. The fourteenth is q28, which the hand written port refuses as well for want of a regular expression engine, and which the planner refuses a step earlier than that, at the alias its GROUP BY names.
+
+A factor of 1.62 over 29 queries is the headline, and two rows say most of what is behind it. q29 is ninety adds and ninety sums over one column, which is the one query here that pays whatever a plan costs per intermediate column ninety times over, and which cost that is has not been run down yet. Take it out and the remaining 28 come to 372.8 ms by hand against 538.7 ms planned, which is 1.45, so one query out of 29 is worth 0.17 of the factor. q5 is the other end, the one query where the planner wins, and it is a reminder that the hand written route is somebody's choice of kernel rather than a lower bound.
+
+The 15 queries the hand route answers in under ten milliseconds cost 52.4 ms by hand and 108.5 ms planned, and the 14 slower ones cost 330.9 ms against 510.8 ms. Planning is close to a fixed cost per query, a median of 3.9 ms here, so it accounts for nearly all of the gap on the fast queries and under a third of it on the slow ones. A fixed cost per query does not grow when the table does, so the same pair at 10M would flatter the planner, and that is worth knowing before anybody quotes the 1.62 at a size it was not measured at.
 
 ## Three queries worth naming
 
