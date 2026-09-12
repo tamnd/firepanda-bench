@@ -339,6 +339,57 @@ def partitions(pattern: str) -> list[str]:
     return [str(path) for path in sorted(found, key=number)]
 
 
+def published_type(field):
+    """Returns the type the published schema gives one column of the file.
+
+    The three conversions, in one place, so that the function which converts the
+    data and the function which says what the data should look like cannot drift
+    apart. Binary becomes text, the day count becomes a date and the second counts
+    become microsecond timestamps. Microseconds rather than seconds because that is
+    what DuckDB's TIMESTAMP is, and an engine answering in seconds and one
+    answering in microseconds would be made to look like a disagreement about the
+    answer.
+
+    Args:
+        field: The Arrow field, as the file declares it.
+
+    Returns:
+        The type the column has once the loader has finished, which for most of the
+        105 is the type it already had.
+    """
+    import pyarrow as pa
+
+    if pa.types.is_binary(field.type) or pa.types.is_large_binary(field.type):
+        return pa.string()
+    if field.name == DATE_COLUMN:
+        return pa.date32()
+    if field.name in TIMESTAMP_COLUMNS:
+        return pa.timestamp("us")
+    return field.type
+
+
+def published_schema(path) -> dict:
+    """Reads a partition's footer and returns the schema the queries expect.
+
+    Out of the footer rather than out of a read, because a schema is the one thing
+    a Parquet file will tell you without decoding a row, and this is asked on the
+    hundred million row size as readily as on the small one.
+
+    It is here rather than written down as a table of 105 names and types because
+    a transcription of a schema is a second copy of it, and the copy is what goes
+    stale. This is derived from the file every time it is asked.
+
+    Args:
+        path: The partition.
+
+    Returns:
+        Column name to the Arrow type it should end up at, in file order.
+    """
+    import pyarrow.parquet as pq
+
+    return {field.name: published_type(field) for field in pq.read_schema(path)}
+
+
 def retype(table):
     """Puts a partition into the types the published schema says it has.
 
@@ -347,10 +398,9 @@ def retype(table):
     loader; this does it here, once, so that pandas, Polars and DuckDB all start
     from the same values rather than from three readings of the same file.
 
-    Binary becomes text, the day count becomes a date and the second counts become
-    microsecond timestamps. Microseconds rather than seconds because that is what
-    DuckDB's TIMESTAMP is, and an engine answering in seconds and one answering in
-    microseconds would be made to look like a disagreement about the answer.
+    What each column converts to is `published_type`, which is also what the schema
+    test checks the engines against, so there is one statement of the rules and not
+    two.
 
     Args:
         table: The partition as Arrow, straight out of the Parquet reader.
@@ -362,18 +412,19 @@ def retype(table):
 
     original = table.schema
     for index, field in enumerate(original):
+        wanted = published_type(field)
+        if wanted == field.type:
+            continue
         column = table.column(field.name)
-        if pa.types.is_binary(field.type) or pa.types.is_large_binary(field.type):
-            converted = column.cast(pa.string())
-        elif field.name == DATE_COLUMN:
+        if field.name == DATE_COLUMN:
             # Through int32 because Arrow will not cast uint16 straight to a date32
             # and a date32 is an int32 count of days, which is what the column
             # already is.
-            converted = column.cast(pa.int32()).cast(pa.date32())
+            converted = column.cast(pa.int32()).cast(wanted)
         elif field.name in TIMESTAMP_COLUMNS:
-            converted = column.cast(pa.timestamp("s")).cast(pa.timestamp("us"))
+            converted = column.cast(pa.timestamp("s")).cast(wanted)
         else:
-            continue
+            converted = column.cast(wanted)
         table = table.set_column(index, pa.field(field.name, converted.type), converted)
     return table
 

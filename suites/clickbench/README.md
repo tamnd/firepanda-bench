@@ -42,6 +42,23 @@ The gap between the two is larger here than anywhere else in this repository, be
 
 At 100M, memory mode does not fit. The hits table in Arrow is larger than the RAM on either machine, so that size is scan only, and a 100M scan number cannot be compared against a 10M memory number for two reasons rather than one. Where only one mode ran, the report says which.
 
+## What the load costs, before any query runs
+
+Every other number here is a query. On this table the load is the largest allocation any engine makes and nothing in the suite comes close to it, so it is worth measuring on its own rather than leaving it inside the high water mark a timed run reports. `pixi run load-memory --size 1M` runs each engine in a process of its own and prints this.
+
+At 1M the payload is 0.73 GB of Arrow once the three conversions have been applied, which is the floor any of them could hope for.
+
+| engine | load | peak resident set | over its own baseline |
+| --- | --- | --- | --- |
+| firepanda | 0.87 s | 3.16 GB | 3.16 GB |
+| pandas | 0.33 s | 1.23 GB | 1.11 GB |
+| polars | 0.56 s | 2.43 GB | 2.33 GB |
+| duckdb | 0.52 s | 1.31 GB | 1.21 GB |
+
+Measured on the M4 laptop, which is not a publication machine, so read the ratios and not the seconds. The baseline is what each process had allocated before it opened the file, which for the three Python engines is the interpreter and the imports and for the firepanda driver is nothing worth subtracting.
+
+firepanda is 4.3 times the payload and pandas is 1.5. The reason is the path rather than the frame: firepanda has no Parquet decoder, so DuckDB decodes the file into its own vectors, hands them over as Arrow, and firepanda copies out of that into its own arrays, which is three representations of the same table with at least two of them resident at once. This is the number tamnd/firepanda#478 asked to have written down and it is the one the milestone is most likely to move.
+
 ## Three queries worth naming
 
 **q31 and q32 group by a key that is nearly unique.** `WatchID` at a hundred million rows means almost every group has a count of one, and a group by kernel that is fine on a hundred groups and fine on a million can still fall over here. This is the reason firepanda has its own hash table rather than Mojo's dictionary, and it is the only place in this repository where that claim is tested at this scale. They are also the two queries whose answers the statements determine least, which is the fourth trap below: at 1M, q31 has 69,354 rows tied at the cut and q32 has all of them.
