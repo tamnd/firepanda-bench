@@ -18,7 +18,7 @@ A full run is fourteen result files: db-benchmark, TPC-H and ClickBench in both 
 
 A suite that only shows wins is not information, and anyone experienced reads it as an advertisement and discounts everything in it. Where pandas, Polars, DuckDB or cuDF is faster, the number goes in the table with a note about why, and if the reason is "not optimized yet" it says that rather than being omitted.
 
-The same applies to coverage. firepanda cannot run TPC-H or ClickBench at all right now, so those two reports carry a firepanda column of twenty two and forty three explicit refusals rather than no firepanda column. An engine that is quietly absent from half a table looks like an engine that is fast on the other half.
+The same applies to coverage. Every suite report carries a column for every engine whether or not that engine answered anything, and a query an engine refused is a refusal with a reason on it rather than a blank. An engine that is quietly absent from half a table looks like an engine that is fast on the other half.
 
 ## What we are measured against
 
@@ -36,16 +36,20 @@ MojoFrame is in that table as a discipline rather than a courtesy. It supports a
 
 <!-- suite-readme: generated, do not edit between these markers -->
 
-No run has been folded in here yet. `pixi run suite-readme` writes this table from the result files of the last run of each suite, one row per suite, and each suite README carries the same comparison per machine and size with throughput, latency spread, peak memory and CPU beside it.
+| suite | from | Polars | DuckDB | firepanda |
+| --- | --- | ---: | ---: | ---: |
+| [tpch](suites/tpch) | sf1, memory, 2026-09-12 | 4.48x / 1.32x | 3.68x / 0.89x | 7.16x / 0.74x |
 
-<!-- suite-readme: end, sha256 afc37538b2f9734b -->
+Speed then peak memory against pandas, geometric means over the queries every engine agreed on, above one better. One row per suite from the largest run of it, named in the second column, because a number from one size and io mode is not comparable to a number from another. A cell saying how many of the suite an engine answered is an engine that answered none of it. Each suite README has the same numbers per machine and size with throughput, latency spread and CPU beside them, and `pixi run report` has them per query.
+
+<!-- suite-readme: end, sha256 9d3921c1d5cb918d -->
 
 ## The suites
 
 | | |
 |---|---|
 | [`suites/db-benchmark`](suites/db-benchmark) | Ten group-by and five join queries at 0.5 GB, 5 GB and 50 GB. Runs today. |
-| [`suites/tpch`](suites/tpch) | All 22 queries at SF1 and SF10, from the specification's own text. Runs today. |
+| [`suites/tpch`](suites/tpch) | All 22 queries at SF1 and SF10, from the specification's own text. Runs today, with all four engines. |
 | [`suites/clickbench`](suites/clickbench) | All 43 queries over ClickHouse's hits table at 1M, 10M and 100M rows. Runs today with pandas, Polars and DuckDB. firepanda waits on a Parquet reader that is not DuckDB. |
 | [`suites/ingestion`](suites/ingestion) | CSV read throughput over four files that are hard in four different ways, cold and warm. Runs today, with all four engines. Parquet waits on firepanda having a reader. |
 | [`suites/udf`](suites/udf) | Ours to define, because no standard suite measures the thing this project is about. Not wired up yet. |
@@ -80,7 +84,7 @@ Three places where the comparison is not perfectly even, stated here rather than
 
 **pandas gets float64 money columns in TPC-H.** Arrow-backed pandas cannot do the decimal arithmetic that Q1 needs, because the intermediate wants precision 61 and Arrow's limit is 38, and there is no way to ask for a narrower one. So decimal columns are cast to double at load. That is faster than exact decimal arithmetic would be, so the bias runs in pandas' favour.
 
-**firepanda does not run every suite, and how much of each one it runs is a number in the suite READMEs rather than a sentence here.** Every one of them carries a coverage column per engine written out of the last run, and the table further up this page says "0 of N" for an engine that answered nothing at all, because a count somebody has to remember to edit is a count that goes stale. The reasons are not generated, so they are here. db-benchmark is complete, and q8 was the last gap in it, which closed when firepanda gained a per group top-n kernel. TPC-H needs the twenty two queries written in the driver and an ordering comparison on strings, and it needs a way to load the dbgen output that does not go through DuckDB. ClickBench needs the same loader problem solved, because its data is only published as Parquet and firepanda's Parquet reader is DuckDB, which is one of the engines in the table. Ingestion is complete, and it is the suite where firepanda reads the same file as everybody else. The report lists every refusal one by one with its reason.
+**firepanda does not run every suite, and how much of each one it runs is a number in the suite READMEs rather than a sentence here.** Every one of them carries a coverage column per engine written out of the last run, and the table further up this page says "0 of N" for an engine that answered nothing at all, because a count somebody has to remember to edit is a count that goes stale. The reasons are not generated, so they are here. db-benchmark is complete, and q8 was the last gap in it, which closed when firepanda gained a per group top-n kernel. TPC-H is complete at sf1 in the memory io mode, all twenty two of them, and firepanda's row count and exact digest agree with pandas' and DuckDB's on every one. What TPC-H still has open is the `--io scan` table, where the read is inside the timed region: firepanda has no Parquet reader of its own, it reads through DuckDB, which is one of the engines in the table, so putting that read on the clock would be measuring DuckDB. ClickBench has the same problem and five queries the SQL layer still refuses, which its suite README names one by one. Ingestion is complete, and it is the suite where firepanda reads the same file as everybody else. The report lists every refusal one by one with its reason.
 
 ## Two methodology notes that decide whether the numbers mean anything
 

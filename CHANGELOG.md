@@ -4,6 +4,33 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### The firepanda TPC-H queries project before they join, and take a top n instead of sorting
+
+Published firepanda numbers on TPC-H move. Six of the twenty two get faster and no other engine is touched, so any result file written before this is not comparable with one written after it on those six.
+
+The queries were carrying columns nobody had asked for through joins. q13 outer joined the whole customer table against the filtered orders, which gathers `c_name`, `c_address`, `c_phone`, `c_comment` and `c_mktsegment` across a million and a half answer rows to compute a count of order keys. q16 joined the filtered part table against the whole of partsupp, which brings `ps_comment` along, and q14 joined against the whole of part for one column of it. q2 joined four whole tables. q20 joined the whole of partsupp and then filtered the nation out of the join output instead of before it.
+
+This is not something firepanda should need help with and eventually it will not: it is projection pushdown, and it is the first thing a planner does. But the firepanda queries here are written against the frame API, which is eager and has nowhere to put a planner, so the projection has to be written down. The pandas queries in `tools/engines` already do exactly this, by hand, in every one of those five places, and Polars gets it from its optimizer without being asked. So the old code was not measuring firepanda against them, it was measuring firepanda doing more work than either.
+
+q10 was a second thing. It groups a hundred and fourteen thousand rows into thirty seven thousand, then orders by revenue and keeps twenty. It was sorting all thirty seven thousand, which orders and then gathers all eight output columns including the hundred character comment, to throw away all but twenty of them. It now calls `nlargest`, which ranks one column and gathers twenty rows. DuckDB and Polars both turn an order by with a limit into a top n operator, so this is the same change their planners make.
+
+Measured on the 13900K at sf1, five runs, medians of three independent suite runs, firepanda only so the comparison is against itself:
+
+| query | before | after | gain |
+| --- | --- | --- | --- |
+| q16 | 47.0 ms | 24.3 ms | 1.93x |
+| q2 | 27.1 ms | 14.6 ms | 1.85x |
+| q13 | 45.5 ms | 26.1 ms | 1.74x |
+| q14 | 26.3 ms | 19.2 ms | 1.37x |
+| q10 | 76.0 ms | 67.1 ms | 1.13x |
+| q20 | 43.3 ms | 40.9 ms | 1.06x |
+
+The suite total goes from 796.6 ms to 728.3 ms. The sixteen queries that were not touched moved by up to eight per cent in both directions, which is the noise band on a machine that had other work on it, and none of the six above is inside it.
+
+Peak RSS does not move on any query, which is expected and is worth saying because it is the more interesting half. The peak on a TPC-H query here is reached while the table is being loaded and not while the query runs, so nothing a query does to its own intermediates shows up in it. tamnd/firepanda#427 has the staged numbers.
+
+Answers are unchanged. firepanda's row count and exact digest still agree with pandas and DuckDB on all twenty two.
+
 ## v0.4.5
 
 A patch. Nothing in the harness changed and no published engine number moves. One measurement was taken again because firepanda got better at SQL underneath it.
