@@ -4,6 +4,10 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+## v0.4.3
+
+A patch. No published number changes and there is one new measurement, which is what a group by costs in memory when its answer is nearly as large as the table it read.
+
 ### What a group by adds on top of the load is measured too
 
 `pixi run group-memory --size 1M` is the sibling of `load-memory`. It loads the hits table, reads the peak resident set, runs q32 once and reads the peak again, one process per engine, and reports the difference. q32 groups by `WatchID` and `ClientIP` with no filter, so the answer has close to one row per row of input, and that is the one shape in the suite where a group by is an allocation question rather than a throughput one.
