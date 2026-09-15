@@ -130,8 +130,8 @@ INGESTION_SUPPORTED = (
 # asks it, which is one list instead of two that have to be kept in step. The
 # tuples above are the older shape and they have gone stale twice: a query landed
 # in the driver and the table went on reporting it as missing, because the list
-# the harness reads was somewhere else. There is nothing to edit here when q28
-# gets its regex engine.
+# the harness reads was somewhere else. q28 landing with firepanda 0.8.6 was the
+# test of that: the driver picked it up and nothing here needed an edit.
 _CLICKBENCH_SUPPORT: dict[str, tuple[tuple[str, ...], dict[str, str]]] = {}
 
 
