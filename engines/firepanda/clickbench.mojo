@@ -38,13 +38,15 @@ same thing the TPC-H port does for the same reason. q23 is the exception, since
 it asks for `SELECT *`, so the wide frame is the answer and the width is the
 query.
 
-One query is refused. q28 groups by `REGEXP_REPLACE(Referer, ...)`, firepanda has
-no regular expression engine, and the refusal says so and names the issue. The
-library does have `text_hostname`, which is that pattern written out by hand and
-byte for byte, and using it here would be answering a benchmark query with a
-kernel written for that one query. That measures the kernel rather than the
-engine, so the refusal stands until there is a regex engine to run the pattern
-the statement actually carries.
+Nothing here is refused, and that is new. q28 groups by `REGEXP_REPLACE(Referer,
+...)` and had no kernel to run it on until firepanda 0.8.6, so this file raised
+a refusal for it and left it out of the query list. It now runs the published
+pattern through firepanda's RE2 engine, the same way the other three ports run
+theirs, and the suite answers all 43. The library also has `text_hostname`, which
+is that pattern written out by hand and byte for byte and is faster because it
+knows how long a row comes out before any byte moves, but calling it here would
+be answering a benchmark query with a kernel written for that one query, which
+measures the kernel rather than the engine.
 """
 
 from firepanda.array.any import AnyArray
@@ -66,6 +68,11 @@ from firepanda.kernel import (
 from firepanda.kernel.binary import BinaryOp, binary_value_any
 from firepanda.kernel.pattern import text_contains
 from firepanda.kernel.reduce import distinct_count_any
+from firepanda.kernel.regex.column import text_replace_regex
+from firepanda.kernel.regex.parse import parse_pattern
+from firepanda.kernel.regex.program import compile_program
+from firepanda.kernel.regex.replace import parse_rewrite
+from firepanda.kernel.regex.route import ENGINE_RE2
 from firepanda.kernel.substr import text_byte_length
 from firepanda.kernel.temporal import (
     ROUND_DOWN,
@@ -150,17 +157,6 @@ def run_clickbench_sql(statement: String, catalog: Catalog) raises -> DataFrame:
             is reported as a refusal rather than as a zero.
     """
     return run(statement, catalog)
-
-
-comptime REGEX_REFUSAL = String(
-    "firepanda has no regular expression engine, so it cannot evaluate the",
-    (
-        " REGEXP_REPLACE this query groups by. It is tracked as"
-        " tamnd/firepanda#480"
-    ),
-    " under milestone tamnd/firepanda#477, which is where the RE2 work sits.",
-)
-"""Why q28 is not answered, in the words the report prints beside the gap."""
 
 
 def projection() -> String:
@@ -1197,6 +1193,75 @@ def q27(hits: DataFrame) raises -> DataFrame:
     return _top(_having(grouped^, "c", 100000), ["l"], [True], 25)
 
 
+comptime Q28_PATTERN = String("^https?://(?:www\\.)?([^/]+)/.*$")
+"""The pattern q28 groups by, as ClickBench publishes it."""
+
+
+def q28(hits: DataFrame) raises -> DataFrame:
+    """Groups referers by the host a regular expression pulls out of them.
+
+    q27 with two things added: the key is computed rather than read, and there
+    is a `MIN` over text beside the average and the count. The computed key is
+    what made this the last query in the suite firepanda could answer, since
+    `REGEXP_REPLACE` reached no kernel until firepanda 0.8.6.
+
+    The pattern goes through the engine and not through `text_hostname`, which
+    is the same pattern written out in Mojo and is faster because it knows how
+    long a row comes out before any byte moves. Using it here would be answering
+    a benchmark query with a kernel written for that one query, which measures
+    the kernel rather than the engine. The other three ports run their own
+    engines over the published pattern and so does this one.
+
+    The pattern is compiled once for the column, which every port does and which
+    is the only part of this that is an optimization rather than a translation.
+    pandas has no way not to, since `Series.str.replace` takes the pattern and
+    compiles it itself.
+
+    Args:
+        hits: The table.
+
+    Returns:
+        The answer.
+
+    Raises:
+        Error: As the operations do, and if the pattern or the replacement will
+            not read, which would be a mistake in this file rather than an
+            answer.
+    """
+    var program = compile_program(
+        parse_pattern(Q28_PATTERN), ENGINE_RE2, captures=True
+    )
+    if not program.ok:
+        raise Error(
+            String("q28: the pattern did not compile: ", program.problem)
+        )
+    var rewrite = parse_rewrite(String("\\1"), program.groups)
+    if not rewrite.ok:
+        raise Error(
+            String("q28: the replacement was refused: ", rewrite.problem)
+        )
+
+    var want: List[String] = ["Referer"]
+    var kept = _keep(hits, want, _nonempty(hits, "Referer"))
+    var at = kept.schema.index_of("Referer")
+    # One replacement a row, which is what `REGEXP_REPLACE` does without a `g`.
+    # The pattern is anchored at both ends and can only match once, so the limit
+    # cannot change the answer here, and asking for what the statement asks for
+    # costs nothing.
+    var key = text_replace_regex(kept[at].strings(), program, rewrite, 1)
+    var length = text_byte_length(kept[at].strings())
+    kept.add_column(Series("k", key^))
+    kept.add_column(Series("l", length^))
+    var by: List[String] = ["k"]
+    var specs: List[AggSpec] = [
+        AggSpec("l", AggKind.MEAN, "l"),
+        _size("k", "c"),
+        AggSpec("Referer", AggKind.MIN, "min(Referer)"),
+    ]
+    var grouped = _group(kept, by^, specs^)
+    return _top(_having(grouped^, "c", 100000), ["l"], [True], 25)
+
+
 def q29(hits: DataFrame) raises -> DataFrame:
     """Sums one column ninety times, each with a different constant added.
 
@@ -1682,7 +1747,7 @@ def run_clickbench(query: String, hits: DataFrame) raises -> DataFrame:
     if query == "q27":
         return q27(hits)
     if query == "q28":
-        raise Error(REGEX_REFUSAL)
+        return q28(hits)
     if query == "q29":
         return q29(hits)
     if query == "q30":
@@ -1722,8 +1787,7 @@ def clickbench_supported() -> List[String]:
     """
     var out = List[String](capacity=QUERY_COUNT)
     for i in range(QUERY_COUNT):
-        if i != 28:
-            out.append(String("q", i))
+        out.append(String("q", i))
     return out^
 
 
@@ -1733,12 +1797,11 @@ def clickbench_refused() -> List[String]:
     Read as pairs, because the harness asks the driver for this list rather than
     keeping a second copy of it. A copy is what goes stale: the driver learns a
     query, nobody edits the Python, and the table goes on reporting a gap that
-    closed two releases ago.
+    closed two releases ago. The list is empty as of firepanda 0.8.6, which is
+    the release that gave q28 a regex engine to run its pattern on, and the
+    function stays because the next gap should be reported the same way.
 
     Returns:
         The name and reason of each refusal.
     """
-    var out = List[String](capacity=2)
-    out.append(String("q28"))
-    out.append(REGEX_REFUSAL)
-    return out^
+    return List[String]()

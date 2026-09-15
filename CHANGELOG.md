@@ -4,6 +4,16 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### firepanda answers all 43 ClickBench queries, so nothing in that suite is refused any more
+
+q28 groups by `REGEXP_REPLACE(Referer, '^https?://(?:www\.)?([^/]+)/.*$', '\1')`. firepanda had no regular expression engine to run that on, so `engines/firepanda/clickbench.mojo` raised a refusal with the reason on it and left the query out of the list the harness asks the driver for. firepanda 0.8.6 has an engine, so the port now compiles the published pattern once for the column and runs it, and the refusal list is empty.
+
+It does not call `text_hostname`, which is that same pattern written out by hand in Mojo and is faster than the engine on it, because answering a benchmark query with a kernel written for that one query measures the kernel and not the engine. The other three ports run their own engines over the published pattern and so does this one. The replacement is asked for with a limit of one, which is what `REGEXP_REPLACE` does without a `g` in its options, and the pattern is anchored at both ends so the limit cannot change the answer here.
+
+Checked against DuckDB 1.5.5 on the 1M partition: two rows out, four columns, the same average length to every digit, the same count, and the same FNV digest on both text columns. That is the same agreement check the harness runs across engines.
+
+The number is not good. One run on a loaded laptop put firepanda at 7.1 s against DuckDB's 0.35 s on the same query and the same file, and pandas' regex pass on its own at about 1.4 s. So the engine works and the answer is right and firepanda is last on this query by a wide margin. A published table will say so once a run is folded in, and the cost is in the regex engine rather than in anything this port does around it.
+
 ### The firepanda TPC-H filters hand all their comparisons over at once
 
 A filter with several comparisons in it used to and them together two at a time, which is what the engine's `logical_and` gives you. Every one of those pairwise calls writes a whole mask column so the next call can read it straight back, and on six million line items a byte a row is six megabytes that nobody asked for. q6 has five predicates, so four of those columns, and the four writes and eight reads cost more than the five comparisons that produced them did.
