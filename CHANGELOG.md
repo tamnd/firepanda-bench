@@ -4,6 +4,10 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+## v0.5.0
+
+A minor bump, because published numbers move on both suites this touches. firepanda's ClickBench coverage goes from 42 of 43 to 43 of 43, so its geometric mean and its coverage line in that table are over a different set of queries than before. Six TPC-H queries got faster because the firepanda ports stopped carrying columns nobody asked for through joins, so any TPC-H result file written before this is not comparable with one written after it on those six. No other engine is touched by any of it.
+
 ### firepanda answers all 43 ClickBench queries, so nothing in that suite is refused any more
 
 q28 groups by `REGEXP_REPLACE(Referer, '^https?://(?:www\.)?([^/]+)/.*$', '\1')`. firepanda had no regular expression engine to run that on, so `engines/firepanda/clickbench.mojo` raised a refusal with the reason on it and left the query out of the list the harness asks the driver for. firepanda 0.8.6 has an engine, so the port now compiles the published pattern once for the column and runs it, and the refusal list is empty.
