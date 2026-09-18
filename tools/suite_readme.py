@@ -181,14 +181,48 @@ def stamp(path: Path) -> str:
     The file has no clock in it. The runner puts the date at the front of the name
     and that is where this comes from, which is also where the site gets it.
 
+    A file whose name does not start with one gets an empty string rather than the
+    first three pieces of its name, because this is what decides which run of a
+    machine and a size is the one with a table. A hand written probe called
+    `probe-rivals.json` sorted above every date there will ever be, so it won the
+    comparison and a README got its numbers from two engines somebody was
+    measuring for an afternoon. An undated file now loses to any dated one and is
+    still used when it is the only file for that machine and size.
+
     Args:
         path: The result file.
 
     Returns:
-        The date, or the file stem when the name is not in the usual shape.
+        The date, or an empty string when the name does not start with one.
     """
     parts = path.stem.split("-")
-    return "-".join(parts[:3]) if len(parts) >= 3 else path.stem
+    if len(parts) < 3:
+        return ""
+    year, month, day = parts[0], parts[1], parts[2]
+    dated = (
+        len(year) == 4
+        and len(month) == 2
+        and len(day) == 2
+        and year.isdigit()
+        and month.isdigit()
+        and day.isdigit()
+    )
+    return f"{year}-{month}-{day}" if dated else ""
+
+
+def named(path: Path) -> str:
+    """Returns what a heading calls a run.
+
+    Its date when it has one, and its file name when it does not, since a table
+    with no name on it cannot be traced back to the file it came from.
+
+    Args:
+        path: The result file.
+
+    Returns:
+        The date or the file stem.
+    """
+    return stamp(path) or path.stem
 
 
 def host_of(document: dict) -> str:
@@ -476,7 +510,7 @@ def run_heading(path: Path, document: dict) -> str:
     """
     return (
         f"### {document['size']}, {document.get('io', 'memory')} io, "
-        f"on {host_of(document)}, {stamp(path)}"
+        f"on {host_of(document)}, {named(path)}"
     )
 
 
@@ -597,7 +631,9 @@ def summary_row(path: Path, document: dict) -> str:
         memory = f"{scored['memory']:.2f}x" if scored["memory"] else "-"
         cells.append(f"{scored['speed']:.2f}x / {memory}")
     suite = document["suite"]
-    where = f"{document['size']}, {document.get('io', 'memory')}, {stamp(path)}"
+    where = (
+        f"{document['size']}, {document.get('io', 'memory')}, {host_of(document)}, {named(path)}"
+    )
     return f"| [{suite}](suites/{suite}) | {where} | " + " | ".join(cells) + " |"
 
 
@@ -628,8 +664,10 @@ def summary_block(documents: list[tuple[Path, dict]]) -> list[str]:
         "",
         "Speed then peak memory against pandas, geometric means over the queries every "
         "engine agreed on, above one better. One row per suite from the largest run of "
-        "it, named in the second column, because a number from one size and io mode is "
-        "not comparable to a number from another. A cell saying how many of the suite an "
+        "it, named in the second column with the machine it ran on, because a number "
+        "from one size, io mode or machine is not comparable to a number from another, "
+        "and two rows of this table are often two machines. A cell saying how many of "
+        "the suite an "
         "engine answered is an engine that answered none of it. Each suite README has "
         "the same numbers per machine and size with throughput, latency spread and CPU "
         "beside them, and `pixi run report` has them per query.",

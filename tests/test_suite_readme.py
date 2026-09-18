@@ -201,6 +201,30 @@ def test_one_table_per_machine_size_and_io_mode_and_the_newest_of_each(tmp_path)
     assert [path.name for path, _ in runs] == [new.name, other.name]
 
 
+def test_a_probe_nobody_dated_does_not_outrank_a_real_run(tmp_path):
+    """A file whose name has no date in it loses to one that has.
+
+    The names sort as strings, so `probe-rivals.json` sat above every date there
+    will ever be and a README took its numbers from whatever two engines somebody
+    was probing that afternoon.
+    """
+    real = tmp_path / "2026-08-28-gamingpc-db-benchmark-0.5GB-memory.json"
+    probe = tmp_path / "probe-rivals.json"
+    real.write_text(json.dumps(_document()))
+    probe.write_text(json.dumps(_document()))
+    runs = suite_readme.pick_runs(suite_readme.load(tmp_path), "db-benchmark")
+    assert [path.name for path, _ in runs] == [real.name]
+
+
+def test_a_probe_is_still_used_when_it_is_the_only_file_there_is(tmp_path):
+    """Losing to a date is not the same as being thrown away."""
+    probe = tmp_path / "probe-rivals.json"
+    probe.write_text(json.dumps(_document()))
+    runs = suite_readme.pick_runs(suite_readme.load(tmp_path), "db-benchmark")
+    assert [path.name for path, _ in runs] == [probe.name]
+    assert suite_readme.named(probe) == "probe-rivals"
+
+
 def test_the_biggest_run_is_the_one_the_front_page_quotes(tmp_path):
     small = tmp_path / "2026-08-28-gamingpc-db-benchmark-0.5GB-memory.json"
     big = tmp_path / "2026-08-28-gamingpc-db-benchmark-5GB-memory.json"
@@ -219,7 +243,9 @@ def test_the_repository_block_says_which_run_each_row_is_from(tmp_path):
     path.write_text(json.dumps(_document()))
     lines = suite_readme.summary_block(suite_readme.load(tmp_path))
     row = next(line for line in lines if line.startswith("| [db-benchmark]"))
-    assert "0.5GB, memory, 2026-08-28" in row
+    # The machine is in there as well, because the rows of this table are often
+    # two machines and a number from one is not a number from the other.
+    assert "0.5GB, memory, gamingpc, 2026-08-28" in row
     assert "4.00x / 2.00x" in row
     # DuckDB and firepanda were not in the run at all, which is not the same thing
     # as having run none of it, so they are a dash rather than a zero.
