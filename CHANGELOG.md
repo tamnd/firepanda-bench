@@ -4,6 +4,24 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+## v0.5.1
+
+A patch release. The measurement does not change and no published number moves because of anything in here. What changes is that the ClickBench block on the suite README and the ClickBench row on the front page exist, and that they come from the run they should.
+
+### The first ClickBench numbers are published
+
+All 43 queries, four engines, the 1M partition in memory mode, five runs each, and every engine agreed with every other on all 43. firepanda 0.8.13 is 9.37x pandas on the geometric mean of the times and 0.48x pandas on peak memory, polars is 4.72x and 0.61x, DuckDB is 3.18x and 1.02x. Both halves of that are in the table because both halves are the claim.
+
+It is a laptop run rather than one from either benchmark machine, which is why the machine is now named in the second column of the front page table beside the size and the io mode. That table already carried a TPC-H row from the desktop and the paragraph under it says nothing is comparable across a machine, so the column had to say which one.
+
+The query this suite was waiting on is q28, which groups by a regular expression replacement over a column of URLs. v0.5.0 said the number was not good and that a published table would say so once a run was folded in. It is better than it was: firepanda answers q28 at 1M in 0.82 s against DuckDB's 0.20 s in the same run, where before the regular expression work in tamnd/firepanda#863 it was 2.33 s, and the one run on a loaded laptop quoted in v0.5.0 was 7.1 s.
+
+### A probe file with no date in its name outranked every real run
+
+`pick_runs` in `tools/suite_readme.py` takes the newest run per machine, size and io mode, and it reads the date off the front of the file name. A name not in that shape fell back to the file stem, so `probe-rivals.json` compared as `probe-rivals`, and `p` sorts above every digit there is. Nine probe files from an afternoon in September therefore beat every dated file beside them, and a ClickBench block generated locally came out holding the two engines somebody had been probing.
+
+An undated file now loses to any dated one, and is still used when it is the only file for that machine, size and io mode, since a probe is a real run of something and a labelled table beats an empty one. Nothing published was ever wrong, because the block had never been folded in at all and the scheduled machines carry no probe files. Issue #92.
+
 ## v0.5.0
 
 A minor bump, because published numbers move on both suites this touches. firepanda's ClickBench coverage goes from 42 of 43 to 43 of 43, so its geometric mean and its coverage line in that table are over a different set of queries than before. Six TPC-H queries got faster because the firepanda ports stopped carrying columns nobody asked for through joins, so any TPC-H result file written before this is not comparable with one written after it on those six. No other engine is touched by any of it.
