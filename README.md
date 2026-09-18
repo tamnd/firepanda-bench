@@ -38,11 +38,12 @@ MojoFrame is in that table as a discipline rather than a courtesy. It supports a
 
 | suite | from | Polars | DuckDB | firepanda |
 | --- | --- | ---: | ---: | ---: |
-| [tpch](suites/tpch) | sf10, memory, 2026-09-12 | 15.96x / 1.11x | 8.16x / 1.06x | 15.19x / 0.68x |
+| [tpch](suites/tpch) | sf10, memory, GamingPC, 2026-09-12 | 15.96x / 1.11x | 8.16x / 1.06x | 15.19x / 0.68x |
+| [clickbench](suites/clickbench) | 1M, memory, USERnoMacBook-Air.local, 2026-09-18 | 4.72x / 0.61x | 3.18x / 1.02x | 9.37x / 0.48x |
 
-Speed then peak memory against pandas, geometric means over the queries every engine agreed on, above one better. One row per suite from the largest run of it, named in the second column, because a number from one size and io mode is not comparable to a number from another. A cell saying how many of the suite an engine answered is an engine that answered none of it. Each suite README has the same numbers per machine and size with throughput, latency spread and CPU beside them, and `pixi run report` has them per query.
+Speed then peak memory against pandas, geometric means over the queries every engine agreed on, above one better. One row per suite from the largest run of it, named in the second column with the machine it ran on, because a number from one size, io mode or machine is not comparable to a number from another, and two rows of this table are often two machines. A cell saying how many of the suite an engine answered is an engine that answered none of it. Each suite README has the same numbers per machine and size with throughput, latency spread and CPU beside them, and `pixi run report` has them per query.
 
-<!-- suite-readme: end, sha256 081ad9ab2738a451 -->
+<!-- suite-readme: end, sha256 2f5d9b5b576c908a -->
 
 ## The suites
 
