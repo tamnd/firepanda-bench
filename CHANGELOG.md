@@ -4,6 +4,14 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### q23 through the SQL route exited on the digest instead of answering
+
+`tools/clickbench_planner.py` reported q23 as a refusal on the planner side and left it out of both totals, which made the pair the planner comparison exists to measure miss the one query in the suite that asks for the table rather than for a reduction of it. The query was running and producing the right ten rows. What raised was the driver reading them back.
+
+A frame's columns are chunked and `DataFrame.__getitem__` borrows a column only when there is exactly one chunk to borrow. A pipeline hands its sink one chunk for every chunk that reached it, so an answer arrives in as many pieces as the operators left it in, and for a reduction that is always one piece. q23 filters a million rows down to ninety five, sorts them and keeps ten, and those ten come off two or three of the chunks the filter left. So whether the driver could read its own answer was decided by where the surviving rows happened to fall.
+
+The answer is now stacked into one chunk a column before anything reads it, after the clock and the memory readings, so no published number moves. Issue #95.
+
 ## v0.5.1
 
 A patch release. The measurement does not change and no published number moves because of anything in here. What changes is that the ClickBench block on the suite README and the ClickBench row on the front page exist, and that they come from the run they should.
