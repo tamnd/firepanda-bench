@@ -4,6 +4,24 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### The planner pair is measured again, and all 43 queries now run both ways
+
+`pixi run clickbench-planner --size 1M` has not been run since 12 September and a lot has landed underneath it. All 43 queries now run as the hand written port and as the published SQL text through firepanda's own front end, where 38 did before, and the two routes agree on all 43 on the row count, the sums and the text hashes. Nothing in this suite is refused by either route any more. The five that were still refused went in one at a time: q27 with tamnd/firepanda#679, q28 and q39 with tamnd/firepanda#681, and q18 and q42 with EXTRACT and DATE_TRUNC under tamnd/firepanda#304.
+
+The hand written total is 671.0 ms and the planner total is 1507.1 ms, a factor of 2.25, at 1M on the M4 laptop with five runs per query per route. The 1.87 this table carried before was over 38 queries rather than 43 and the two should not be subtracted, because both sides moved and neither moved for a reason to do with planning.
+
+The hand written side got faster when #89 here handed every comparison in a filter over at once. The planner side got slower on 15 September when tamnd/firepanda#803 had a scan cut a tall chunk into morsels. That change was measured on a filtering line and made it two and a half times faster, and every query in this suite with a group by or a reduction under it went the other way by between one and a half and four times. q33 through the planner bisects to that commit, 53 milliseconds before it and 216 after, with the two drivers built from the same source here and run back to back. That is tamnd/firepanda#918.
+
+No published engine number moves. The ClickBench table compares the hand written port against pandas, Polars and DuckDB and that route does not build a pipeline.
+
+q23 is the row that moved the other way, from 10.39 to 1.73, which is tamnd/firepanda#912 for the limit that was taking the query off the cores and #95 here for the answer the driver could not read back.
+
+### The pair divided by a hand written route that answers in no time
+
+`tools/clickbench_planner.py` measured all 43 queries both ways and then raised `ZeroDivisionError` on its way to printing the table, which is four minutes of measuring lost and nothing written to the file `--json` names.
+
+q0 is `SELECT COUNT(*) FROM hits` and the hand written port answers it out of the row count without reading a column, which the driver times at zero once the first run has warmed it. A ratio against that is not a large number, it is not a number, so the column carries a dash and the query keeps its row with both times in it. The file `--json` names is now written before the table is printed, so a run that took the numbers and then fell over on the way to the screen still has them. Issue #97.
+
 ### q23 through the SQL route exited on the digest instead of answering
 
 `tools/clickbench_planner.py` reported q23 as a refusal on the planner side and left it out of both totals, which made the pair the planner comparison exists to measure miss the one query in the suite that asks for the table rather than for a reduction of it. The query was running and producing the right ten rows. What raised was the driver reading them back.

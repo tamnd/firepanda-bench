@@ -49,6 +49,14 @@ def test_the_reported_time_is_the_median_and_not_the_mean():
     assert tool.seconds(answer(1, 1)) == 0.02
 
 
+def test_a_hand_written_route_that_took_no_time_still_gets_a_row():
+    # q0 is SELECT COUNT(*) and the hand written port answers it out of the row
+    # count without reading a column, which the driver times at zero. The ratio
+    # against that is not a number, and the query is still one of the 43.
+    assert tool.ratio(0.0, 0.004).strip() == "-"
+    assert tool.ratio(0.004, 0.008).strip() == "2.00"
+
+
 def test_two_routes_that_answer_the_same_thing_agree():
     hand = answer(10, 2, {"count_star()": 43.0, "sum(qty)": 12.5})
     planned = answer(10, 2, {"__expr_0": 12.5, "__expr_1": 43.0})

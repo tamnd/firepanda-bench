@@ -135,6 +135,27 @@ def agree(hand: dict, planned: dict) -> bool:
     return digest(hand) == digest(planned)
 
 
+def ratio(hand: float, planned: float) -> str:
+    """Formats the planner route against the hand written one.
+
+    q0 is `SELECT COUNT(*) FROM hits` and the hand written port answers it out of
+    the row count without reading a column, which the driver times at zero once
+    the first run has warmed it. A ratio against zero is not a large number, it is
+    not a number, so the column says so and the query stays in the table with its
+    two times in it.
+
+    Args:
+        hand: The hand written route's median, in seconds.
+        planned: The planner route's median, in seconds.
+
+    Returns:
+        The column, already padded.
+    """
+    if hand <= 0.0:
+        return f"{'-':>9}"
+    return f"{planned / hand:>9.2f}"
+
+
 def measure(binary: Path, pattern: str, runs: int) -> list[dict]:
     """Runs all 43 both ways.
 
@@ -194,6 +215,25 @@ def main(argv: list[str] | None = None) -> int:
     planner_total = sum(r["planner_s"] for r in both)
     argued = [r["query"] for r in measured if r.get("agree") is False]
 
+    # Written before the table is printed rather than after it. The pair takes
+    # four minutes at 1M and a run that measured all 43 and then fell over on the
+    # way to the screen should not lose them.
+    if args.json:
+        Path(args.json).write_text(
+            json.dumps(
+                {
+                    "size": args.size,
+                    "runs": args.runs,
+                    "queries": measured,
+                    "hand_total_s": hand_total,
+                    "planner_total_s": planner_total,
+                    "both": len(both),
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+
     print(f"the 43 queries at {args.size}, median of {args.runs}, in milliseconds")
     print(f"{'query':<8}{'hand':>10}{'planner':>10}{'ratio':>9}  {'note':<40}")
     for record in measured:
@@ -217,30 +257,16 @@ def main(argv: list[str] | None = None) -> int:
             f"{record['query']:<8}"
             f"{hand * 1000:>10.1f}"
             f"{planned * 1000:>10.1f}"
-            f"{planned / hand:>9.2f}  {rows}"
+            f"{ratio(hand, planned)}  {rows}"
         )
     print(
         f"{'total':<8}{hand_total * 1000:>10.1f}{planner_total * 1000:>10.1f}"
-        f"{planner_total / hand_total:>9.2f}  over the {len(both)} both routes run"
+        f"{ratio(hand_total, planner_total)}  over the {len(both)} both routes run"
     )
     if argued:
         print(f"the routes disagree on {', '.join(argued)}")
 
     if args.json:
-        Path(args.json).write_text(
-            json.dumps(
-                {
-                    "size": args.size,
-                    "runs": args.runs,
-                    "queries": measured,
-                    "hand_total_s": hand_total,
-                    "planner_total_s": planner_total,
-                    "both": len(both),
-                },
-                indent=2,
-            )
-            + "\n"
-        )
         print(f"wrote {args.json}")
     return 0
 
