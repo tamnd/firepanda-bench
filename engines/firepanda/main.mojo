@@ -1167,6 +1167,40 @@ def column_hash(ref column: AnyArray) raises -> UInt64:
     return total
 
 
+def one_chunk(var answer: DataFrame) raises -> DataFrame:
+    """Stacks each column of an answer into the single chunk this file reads.
+
+    A frame's columns are chunked, and `DataFrame.__getitem__` borrows a column
+    only when there is exactly one chunk to borrow. Everything below reads the
+    answer that way, which is right for the answers most queries produce and
+    wrong for the ones that arrive in pieces. A pipeline hands its sink one chunk
+    per chunk that reached it, so whether an answer is in one piece or three is
+    decided by where the surviving rows happened to fall rather than by the
+    query. ClickBench q23 through the SQL route is the case that found this: ten
+    rows come back, they come from two or three of the chunks the filter left,
+    and the driver exited on the digest instead of printing a number.
+
+    This is the copy `DataFrame.column` would make per column, made once for the
+    whole frame, and it is outside the timed region and after the memory readings
+    so it costs the published numbers nothing.
+
+    Args:
+        answer: The frame the query produced, consumed here.
+
+    Returns:
+        The same rows, one chunk a column.
+
+    Raises:
+        Error: If a column's chunks cannot be stacked.
+    """
+    var schema = answer.schema.copy()
+    var pieces = answer^.into_columns()
+    var out = List[ChunkedArray](capacity=len(pieces))
+    while len(pieces) != 0:
+        out.append(ChunkedArray(pieces.pop(0).combine()))
+    return DataFrame(schema^, out^)
+
+
 struct Usage(Copyable, Movable):
     """What `getrusage` says about this process."""
 
@@ -1675,6 +1709,7 @@ def main() raises:
 
     # After the clock and the memory readings, so asking for the answer does not
     # change the numbers the run reports.
+    answer = one_chunk(answer^)
     if answer_path:
         write_csv(answer, answer_path)
 
