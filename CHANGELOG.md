@@ -4,6 +4,10 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+## v0.5.2
+
+A patch release. No engine number moves and the measurement does not change. What changes is the planner pair, which now covers all 43 queries instead of 38 and which says something about firepanda it did not say before.
+
 ### The planner pair is measured again, and all 43 queries now run both ways
 
 `pixi run clickbench-planner --size 1M` has not been run since 12 September and a lot has landed underneath it. All 43 queries now run as the hand written port and as the published SQL text through firepanda's own front end, where 38 did before, and the two routes agree on all 43 on the row count, the sums and the text hashes. Nothing in this suite is refused by either route any more. The five that were still refused went in one at a time: q27 with tamnd/firepanda#679, q28 and q39 with tamnd/firepanda#681, and q18 and q42 with EXTRACT and DATE_TRUNC under tamnd/firepanda#304.
