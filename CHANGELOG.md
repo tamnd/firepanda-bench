@@ -4,6 +4,10 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+## v0.5.3
+
+A patch release. No engine number moves and the measurement does not change. What changes is the planner pair, which was retaken after the regression v0.5.2 blamed it on was fixed, and which now reads 1.61 where it read 2.25.
+
 ### The planner pair is measured again, after the morsel regression was fixed
 
 v0.5.2 published a ratio of 2.25 and said in the same breath that most of it was tamnd/firepanda#803 rather than anything to do with planning. That is now fixed by tamnd/firepanda#921, which moves the cut from the scan's constructor to the point where the pipeline knows what is above it, so a line whose first operator is a group by or a reduction is no longer handed morsels it has nothing to spread over.
