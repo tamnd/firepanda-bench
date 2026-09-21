@@ -4,6 +4,12 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### The q29 paragraph in the ClickBench suite README names what was actually wrong
+
+v0.5.3 left q29 as the worst single row at 6.01 and pointed at tamnd/firepanda#922, which was open and did not yet have a cause. It has one now, tamnd/firepanda#929: a reduction applied an aggregate's folded operation once per state slot rather than once per column, and a sum marked to answer null over a column that held nothing owns two slots, which is what the SQL front end builds for every SUM. Both slots read the same column under the same constant, so ninety marked sums meant ninety extra passes down the million rows.
+
+The paragraph now carries the paired measurement, two drivers built from the same source here and run back to back over thirteen rounds, 583 ms of CPU time per run against 380. It also carries the quiet machine wall reading, 35.4 ms against the 43.2 still printed in the table above it, and says plainly that the table was taken before the fix landed and that the row will move when the pair is next taken on a machine quiet enough to publish from. No number in the table changes in this release.
+
 ## v0.5.3
 
 A patch release. No engine number moves and the measurement does not change. What changes is the planner pair, which was retaken after the regression v0.5.2 blamed it on was fixed, and which now reads 1.61 where it read 2.25.
