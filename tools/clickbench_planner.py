@@ -135,23 +135,34 @@ def agree(hand: dict, planned: dict) -> bool:
     return digest(hand) == digest(planned)
 
 
+FLOOR_S = 1e-5
+"""Under this, the hand written route did not touch the table at all.
+
+The only one of the 43 like that is q0, `SELECT COUNT(*) FROM hits`, which the
+hand written port answers out of the row count. The driver has timed it at zero
+and at one microsecond on different days, which is the clock rather than the
+query, and a ratio against either is a number that moves by a factor of a thousand
+without anything changing.
+
+Ten microseconds rather than a rounder number because of where the two sit. q0 is
+timed at one, and the fastest query here that does read a column is q6, a minimum
+and a maximum over one date column, which is about ninety and stays there. This
+is an order of magnitude away from both, so it is not a line anything is close
+to."""
+
+
 def ratio(hand: float, planned: float) -> str:
     """Formats the planner route against the hand written one.
-
-    q0 is `SELECT COUNT(*) FROM hits` and the hand written port answers it out of
-    the row count without reading a column, which the driver times at zero once
-    the first run has warmed it. A ratio against zero is not a large number, it is
-    not a number, so the column says so and the query stays in the table with its
-    two times in it.
 
     Args:
         hand: The hand written route's median, in seconds.
         planned: The planner route's median, in seconds.
 
     Returns:
-        The column, already padded.
+        The column, already padded, or a dash where a ratio would not be a
+        measurement.
     """
-    if hand <= 0.0:
+    if hand < FLOOR_S:
         return f"{'-':>9}"
     return f"{planned / hand:>9.2f}"
 

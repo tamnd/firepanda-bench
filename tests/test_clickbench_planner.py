@@ -57,6 +57,17 @@ def test_a_hand_written_route_that_took_no_time_still_gets_a_row():
     assert tool.ratio(0.004, 0.008).strip() == "2.00"
 
 
+def test_a_route_that_took_one_clock_tick_does_not_get_a_ratio_either():
+    # The same query on another day, timed at a microsecond rather than at
+    # nothing. Dividing by it says 3440, which is the clock and not the query,
+    # and it is the largest number in the table by a factor of a hundred.
+    assert tool.ratio(1e-06, 0.00344).strip() == "-"
+    # q6 is the fastest query here that does read a column, a minimum and a
+    # maximum over one date column, and it is ninety four microseconds. It gets
+    # a ratio, because it measured something.
+    assert tool.ratio(9.4e-05, 0.0013).strip() == "13.83"
+
+
 def test_two_routes_that_answer_the_same_thing_agree():
     hand = answer(10, 2, {"count_star()": 43.0, "sum(qty)": 12.5})
     planned = answer(10, 2, {"__expr_0": 12.5, "__expr_1": 43.0})
