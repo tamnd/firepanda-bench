@@ -4,6 +4,12 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### The seven date range queries in the ClickBench suite README have their fixes named
+
+That paragraph said the seven were the worst block in the table, 83.9 ms by hand against 276.2, and that the cause was each conjunct becoming a filter of its own and copying the rows that survived it. The diagnosis held up and two changes landed against it. tamnd/firepanda#962 hands the chunk straight back when a comparison kept every row, which is what both date comparisons do here, since the 1M partition lies entirely inside the month the queries ask for. tamnd/firepanda#970 tells a filter with another filter above it to write a selection whatever share it keeps, since the copy the threshold asks for is one the next filter makes again.
+
+The paragraph now carries the paired measurement, two drivers built from the same source here and run back to back on a quiet machine, CPU per run in milliseconds: q38 59.4 against 12.6, q41 21.6 against 6.3, q40 18.4 against 11.8, q42 27.2 against 20.1, q37 80.0 against 62.8, q36 149.1 against 121.9, q39 312.1 against 290.6. It also carries a planner pass where the block read 223.7 ms through the front end against the 276.2 in the table, on a pass whose hand written side for those seven came to 80.3 against 83.9, which is close enough to compare across. No number in the table changes in this release, and it says why: the machine has not been quiet enough to retake the pair since the changes landed, and four passes taken this morning came to hand written totals between 861 and 2498.
+
 ### The q29 paragraph in the ClickBench suite README names what was actually wrong
 
 v0.5.3 left q29 as the worst single row at 6.01 and pointed at tamnd/firepanda#922, which was open and did not yet have a cause. It has one now, tamnd/firepanda#929: a reduction applied an aggregate's folded operation once per state slot rather than once per column, and a sum marked to answer null over a column that held nothing owns two slots, which is what the SQL front end builds for every SUM. Both slots read the same column under the same constant, so ninety marked sums meant ninety extra passes down the million rows.
