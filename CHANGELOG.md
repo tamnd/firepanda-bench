@@ -4,6 +4,22 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### The planner pair is measured again, after the morsel regression was fixed
+
+v0.5.2 published a ratio of 2.25 and said in the same breath that most of it was tamnd/firepanda#803 rather than anything to do with planning. That is now fixed by tamnd/firepanda#921, which moves the cut from the scan's constructor to the point where the pipeline knows what is above it, so a line whose first operator is a group by or a reduction is no longer handed morsels it has nothing to spread over.
+
+The pair reads 732.6 ms by hand against 1181.0 through the planner, a factor of 1.61, at 1M with three runs per query per route. The hand written totals either side of the fix are 671.0 and 732.6, so the drop in the planner total from 1507.1 is the route and not the laptop. The five group by rows moved together: q33 from 161.1 ms to 51.2, q32 from 193.3 to 39.7, q16 from 63.2 to 30.9, q29 from 110.8 to 68.2, each pair built from the same source here and run back to back.
+
+The section in `suites/clickbench/README.md` is rewritten around the new numbers. What it points at now is the seven queries that filter a date range before they group, 83.9 ms by hand against 276.2, a factor of 3.29, where each conjunct becomes a filter of its own and copies the rows that survived it. That is tamnd/firepanda#521 and it is the largest thing left in the comparison. q29 is the worst single row at 6.01 and did not come all the way back with the morsel fix, which is tamnd/firepanda#922.
+
+The same pair was taken three times within the hour at load averages of 16, 8 and 3, and came to 1.81, 1.66 and 1.61. Both sides slow down on a busy machine and the planner route slows down more, so the README now says to read the ratio and not the milliseconds, with the measurement behind it.
+
+### A hand written route timed at one microsecond no longer gets a ratio
+
+v0.5.2 stopped `tools/clickbench_planner.py` dividing by a route that took exactly no time. q0 is the only query like that, `SELECT COUNT(*) FROM hits` answered out of the row count, and on a later day the driver timed it at one microsecond rather than at zero, which slipped past the guard and printed 3440.00 in the ratio column. That was the largest number in the table by a factor of a hundred and it measured the clock.
+
+The guard is now a floor of ten microseconds rather than a test against zero. It sits an order of magnitude away from both sides of the gap it has to fall in: q0 is timed at one microsecond and the fastest query here that does read a column is q6, a minimum and a maximum over one date column, at ninety four. The row still carries both of its times and the ratio column carries a dash.
+
 ## v0.5.2
 
 A patch release. No engine number moves and the measurement does not change. What changes is the planner pair, which now covers all 43 queries instead of 38 and which says something about firepanda it did not say before.
