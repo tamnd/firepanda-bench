@@ -4,6 +4,10 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+## v0.5.4
+
+A patch release. No engine number moves, no published table changes and the measurement is the same measurement. What changes is that the two worst rows of the planner comparison now say what was done about them, which is the part a reader cannot get from the numbers.
+
 ### The seven date range queries in the ClickBench suite README have their fixes named
 
 That paragraph said the seven were the worst block in the table, 83.9 ms by hand against 276.2, and that the cause was each conjunct becoming a filter of its own and copying the rows that survived it. The diagnosis held up and two changes landed against it. tamnd/firepanda#962 hands the chunk straight back when a comparison kept every row, which is what both date comparisons do here, since the 1M partition lies entirely inside the month the queries ask for. tamnd/firepanda#970 tells a filter with another filter above it to write a selection whatever share it keeps, since the copy the threshold asks for is one the next filter makes again.
