@@ -4,6 +4,10 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+## v0.5.5
+
+A patch release. No engine number moves, no published table changes and the measurement is the same measurement. What changes is that the planner comparison now has two more passes under it, taken with everything that has landed since the table was, and that the last gap the q23 paragraph said was open has a price on it.
+
 ### The planner pair is taken twice more, and the ClickBench suite README says what the two passes agree on
 
 The table in that section is still the one from 19 September and no number in it changes. What is added under it is two passes taken on 23 September, with everything that landed in between, and what they agree on. The first came to 1136.4 ms by hand against 1585.9 through the planner for a ratio of 1.40, with the load average between 5 and 8. The second came to 2029.7 against 2795.3 for 1.38, with the load between 9 and 12. Both agree with the hand written route on all 43 answers. The table is not replaced with either, because the hand written side alone reads 1136.4 against the 732.6 the table was taken at and a reader comparing a row against its old value would be reading the laptop.
