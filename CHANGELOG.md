@@ -4,6 +4,16 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### The planner pair is taken twice more, and the ClickBench suite README says what the two passes agree on
+
+The table in that section is still the one from 19 September and no number in it changes. What is added under it is two passes taken on 23 September, with everything that landed in between, and what they agree on. The first came to 1136.4 ms by hand against 1585.9 through the planner for a ratio of 1.40, with the load average between 5 and 8. The second came to 2029.7 against 2795.3 for 1.38, with the load between 9 and 12. Both agree with the hand written route on all 43 answers. The table is not replaced with either, because the hand written side alone reads 1136.4 against the 732.6 the table was taken at and a reader comparing a row against its old value would be reading the laptop.
+
+Individual rows from those passes are not worth quoting and the paragraph says so: q16 read 1.20 and then 2.25, q29 6.05 and then 3.89, q23 1.61 and then 2.11. What did hold still is the split by how long the hand written route takes. The queries it answers in under ten milliseconds came to a ratio of 2.33 and then 2.24, with a median of 2.22 ms and then 2.97 ms added per query. The ones it takes ten milliseconds or more over came to 1.30 and then 1.34, down from the 1.46 the section already carried and the 2.12 before that. The part that scales with the query is most of the way down and the part that does not is the front end being paid for, which is now tamnd/firepanda#999.
+
+### The q23 paragraph in the ClickBench suite README carries the price of what was left
+
+That paragraph ended by saying the remaining gap was ninety five rows written out across 105 columns before ten of them are kept, and that tamnd/firepanda#682 was open for it. It now carries what that is worth. Splitting the statement into its pieces, `SELECT EventTime FROM hits LIMIT 10` is 2.9 ms with nothing under it, `SELECT * FROM hits LIMIT 10` is 6.4, so the width costs 3.5 ms on its own and the hand written route pays that too. With the filter and the sort under it the width costs 5.1 ms, so the middle frame is 1.6 ms at most, on the one query in the suite with this shape. #682 is closed on the measurement rather than on the rule it was opened for.
+
 ## v0.5.4
 
 A patch release. No engine number moves, no published table changes and the measurement is the same measurement. What changes is that the two worst rows of the planner comparison now say what was done about them, which is the part a reader cannot get from the numbers.
