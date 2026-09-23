@@ -4,6 +4,10 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+## v0.6.0
+
+A minor bump, and the rule at the top of this file is why. The ClickBench planner route stops charging firepanda for reading its grammar tables on every timed query, which takes one to one and a half milliseconds off each query through that route. It is a fixed amount a query, so it moves the fast half of the planner comparison and not the slow half, and a planner number written before this is not comparable with one written after it. The engine table is the hand written route and nothing in it moves. The driver needs firepanda 0.8.26 or later.
+
 ### The ClickBench planner route stops paying for firepanda's grammar tables on every query
 
 The planner route called `firepanda.sql.run`, which built the grammar, the jump table built from it and the function catalog on every statement and threw them away. Those three are read out of generated tables, do not depend on the statement, the catalog or the data, and are never written to after they are built. The driver now builds one `Dialect` for the process, next to the catalog registration that was already outside the clock, and `run_clickbench_sql` takes it. Parsing, binding, optimizing and lowering are still timed, and the suite README writes down the test for which side of the clock something falls on.
