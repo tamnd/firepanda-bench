@@ -81,7 +81,7 @@ from firepanda.kernel.temporal import (
     temporal_round,
 )
 from firepanda.sql.catalog import Catalog
-from firepanda.sql.run import run
+from firepanda.sql.run import Dialect
 
 comptime QUERY_COUNT = 43
 """How many queries ClickBench publishes, numbered q0 through q42."""
@@ -133,7 +133,9 @@ def clickbench_statement(path: String, query: String) raises -> String:
     )
 
 
-def run_clickbench_sql(statement: String, catalog: Catalog) raises -> DataFrame:
+def run_clickbench_sql(
+    dialect: Dialect, statement: String, catalog: Catalog
+) raises -> DataFrame:
     """Runs one published statement through the SQL front end.
 
     The other route through this file is the same 43 queries written against the
@@ -141,11 +143,23 @@ def run_clickbench_sql(statement: String, catalog: Catalog) raises -> DataFrame:
     chose. This one hands the planner the text and lets it choose, and the pair
     of totals is what tamnd/firepanda#485 exists to measure.
 
-    Parsing and planning are inside the call rather than hoisted out of it, on
+    Parsing, binding, optimizing and lowering are all inside the timed call, on
     purpose. What is being measured is what a planner is worth, and a planner
     that is not paid for is not being measured.
 
+    The dialect is not. It holds the grammar, the jump table built from it and
+    the function catalog, which are read out of generated tables, do not depend
+    on the statement or the catalog or the data, and are never written to after
+    they are built. It is handed in for the same reason the catalog above is
+    registered before the clock: it is a session, and every engine in this suite
+    gets one. A DuckDB connection carries its parser tables, its catalog and its
+    function registry, and this suite opens it in `load` and times
+    `connection.execute`. pandas and polars parse no SQL at all here. Charging
+    firepanda two milliseconds a statement for reading a table its rivals read
+    once would be measuring the table read, not the planner.
+
     Args:
+        dialect: The grammar, jump table and function catalog, built once.
         statement: The published statement.
         catalog: The names the statement is allowed to say, holding `hits`.
 
@@ -156,7 +170,7 @@ def run_clickbench_sql(statement: String, catalog: Catalog) raises -> DataFrame:
         Error: If the statement is a shape the SQL layer does not run yet, which
             is reported as a refusal rather than as a zero.
     """
-    return run(statement, catalog)
+    return dialect.run(statement, catalog)
 
 
 def projection() -> String:

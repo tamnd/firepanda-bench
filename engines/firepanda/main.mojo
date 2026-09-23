@@ -67,6 +67,7 @@ from firepanda.io.write import write_csv
 from firepanda.join import JoinKind
 from firepanda.kernel import AggKind, multiply, subtract
 from firepanda.sql.catalog import Catalog
+from firepanda.sql.run import Dialect
 
 from clickbench import (
     clickbench_refused,
@@ -1594,6 +1595,12 @@ def main() raises:
     # a session and building one per run would charge the SQL route a table
     # registration the hand written route does not pay.
     var catalog = Catalog()
+    # Built here for the same reason, and the reason is written out beside
+    # `run_clickbench_sql`. The three tables it holds are generated, are the
+    # same on every statement, and are never written to after they are read, so
+    # building one per run would charge the SQL route a table read that every
+    # other engine in the suite does once when its session opens.
+    var dialect = Dialect()
     var statement = String()
     try:
         # An ingestion query loads nothing before it is timed. Opening the file
@@ -1676,7 +1683,7 @@ def main() raises:
             elif playing:
                 answer = run_tpch(query, tpch_tables)
             elif hitting and statements:
-                answer = run_clickbench_sql(statement, catalog)
+                answer = run_clickbench_sql(dialect, statement, catalog)
             elif hitting:
                 answer = run_clickbench(query, hits)
             else:
