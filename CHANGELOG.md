@@ -4,6 +4,16 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### The ClickBench planner route stops paying for firepanda's grammar tables on every query
+
+The planner route called `firepanda.sql.run`, which built the grammar, the jump table built from it and the function catalog on every statement and threw them away. Those three are read out of generated tables, do not depend on the statement, the catalog or the data, and are never written to after they are built. The driver now builds one `Dialect` for the process, next to the catalog registration that was already outside the clock, and `run_clickbench_sql` takes it. Parsing, binding, optimizing and lowering are still timed, and the suite README writes down the test for which side of the clock something falls on.
+
+This is what every other engine here already gets. A DuckDB connection carries its parser tables and its function registry, the suite opens it in `load` and times `connection.execute`, and pandas and Polars parse no SQL here at all.
+
+Two drivers built from the same source with and without the change, run back to back, six interleaved rounds of five runs a query: the paired median saving was 1.15 ms on q21, 1.15 on q24, 1.55 on q30, 1.05 on q38 and 1.51 on q42, and 29 of the 30 pairs went the same way. A full planner pass agrees on all 43 answers. It is a fixed amount a query, so it moves the fast half of the suite and not the slow half, and planner numbers from before and after this are not comparable. That is why the release carrying it is a minor one.
+
+The driver needs firepanda 0.8.26 or later, which is the release that added `Dialect`. Closes #108.
+
 ## v0.5.5
 
 A patch release. No engine number moves, no published table changes and the measurement is the same measurement. What changes is that the planner comparison now has two more passes under it, taken with everything that has landed since the table was, and that the last gap the q23 paragraph said was open has a price on it.
