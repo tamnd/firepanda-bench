@@ -458,6 +458,13 @@ def measure(
         for table in TPCH_TABLES:
             if table in paths:
                 command.append(f"--path-{table}={paths[table]}")
+        # The reader holds a string column that repeats as codes into its
+        # distinct values, which is firepanda's own storage choice and not a
+        # change to the query: the dtype still says string and the answers are
+        # the same. FIREPANDA_ENCODE_STRINGS=0 reads everything flat, for
+        # measuring what the encoding is worth.
+        encode = os.environ.get("FIREPANDA_ENCODE_STRINGS", "1").strip()
+        command.append(f"--encode-strings={'0' if encode == '0' else '1'}")
     try:
         completed = subprocess.run(
             command, capture_output=True, text=True, timeout=timeout_s, check=False
