@@ -56,6 +56,7 @@ from firepanda.dtype import Field, LogicalType, Schema
 from firepanda.frame.frame import DataFrame
 from firepanda.frame.groupby import AggKind, AggSpec
 from firepanda.frame.series import Series
+from firepanda.array.chunked import ChunkedArray
 from firepanda.io.parquet import Session
 from firepanda.join import JoinKind
 from firepanda.kernel import (
@@ -198,12 +199,16 @@ struct Tpch(Movable):
         self.supplier = DataFrame()
 
 
-def load_tpch(paths: List[String]) raises -> Tpch:
+def load_tpch(paths: List[String], encode_strings: Bool = False) raises -> Tpch:
     """Reads the tables whose paths were given.
 
     Args:
         paths: One entry per name in `table_names`, in that order, empty for a
             table this query does not read.
+        encode_strings: Whether the reader holds a string column whose values
+            repeat as codes into its distinct values, which is firepanda's
+            `Session.run(encode_strings=True)`. The dtype stays string either
+            way, so the queries do not change.
 
     Returns:
         The loaded tables.
@@ -232,7 +237,8 @@ def load_tpch(paths: List[String]) raises -> Tpch:
                 " FROM read_parquet('",
                 paths[i],
                 "')",
-            )
+            ),
+            encode_strings=encode_strings,
         )
         if name == "customer":
             out.customer = frame^
@@ -2103,7 +2109,55 @@ def q22(ref tables: Tpch) raises -> DataFrame:
     return idle.group_by(by^, specs^, True, True)
 
 
+def _flat(var answer: DataFrame) raises -> DataFrame:
+    """Decodes any column of an answer the reader held as codes.
+
+    With `--encode-strings=1` a string column can reach the answer still
+    encoded, `p_mfgr` in q2 is one, and every other engine hands back plain
+    strings. So the answer is decoded here, inside the timed region, where it
+    costs a row a view over the few hundred rows an answer has.
+
+    Args:
+        answer: What the query returned, consumed here.
+
+    Returns:
+        The same answer with every column flat.
+
+    Raises:
+        If a column is in pieces that cannot be stacked.
+    """
+    var schema = answer.schema.copy()
+    var pieces = answer^.into_columns()
+    var out = List[ChunkedArray](capacity=len(pieces))
+    while len(pieces) != 0:
+        var piece = pieces.pop(0)
+        var held = False
+        for c in range(len(piece.chunks)):
+            held = held or not piece.chunks[c].is_flat()
+        if not held:
+            out.append(piece^)
+            continue
+        out.append(ChunkedArray(piece^.combine().decoded()))
+    return DataFrame(schema^, out^)
+
+
 def run_tpch(query: String, ref tables: Tpch) raises -> DataFrame:
+    """Runs one of the twenty two queries and hands back a flat answer.
+
+    Args:
+        query: `q1` through `q22`.
+        tables: The loaded tables.
+
+    Returns:
+        The answer.
+
+    Raises:
+        If the query is not one this engine runs.
+    """
+    return _flat(_answer(query, tables))
+
+
+def _answer(query: String, ref tables: Tpch) raises -> DataFrame:
     """Runs one TPC-H query and returns its answer.
 
     Args:

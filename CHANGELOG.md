@@ -4,6 +4,10 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### firepanda reads TPC-H with its repeating string columns held as codes
+
+This changes what a published firepanda TPC-H number means, so the next release is a minor bump. The driver takes `--encode-strings=1` and passes `encode_strings=True` to firepanda's Parquet read, and the harness sets it unless `FIREPANDA_ENCODE_STRINGS=0`. A string column whose values repeat, like `l_shipmode` or `p_type`, comes back as int32 codes into its distinct values with the dtype still string. `run_tpch` decodes any column still encoded before it returns, inside the timed region, because every other engine hands back plain strings. On sf1 on a six core Linux machine all 22 answers match the flat read byte for byte, and the peak of each query with every table loaded went from 2.80 to 3.08 GB flat to 2.60 to 2.70 GB. The driver needs firepanda with #1043 in it.
+
 ## v0.6.0
 
 A minor bump, and the rule at the top of this file is why. The ClickBench planner route stops charging firepanda for reading its grammar tables on every timed query, which takes one to one and a half milliseconds off each query through that route. It is a fixed amount a query, so it moves the fast half of the planner comparison and not the slow half, and a planner number written before this is not comparable with one written after it. The engine table is the hand written route and nothing in it moves. The driver needs firepanda 0.8.26 or later.

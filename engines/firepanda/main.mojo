@@ -1612,7 +1612,9 @@ def main() raises:
             or hitting else load(query, rows)
         )
         if playing:
-            tpch_tables = load_tpch(tpch_paths())
+            tpch_tables = load_tpch(
+                tpch_paths(), flag("encode-strings", "0") == "1"
+            )
         if hitting:
             hits = load_clickbench(path)
             if statements:
