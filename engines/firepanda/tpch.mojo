@@ -931,14 +931,22 @@ def q5(ref tables: Tpch) raises -> DataFrame:
     """
     var region_key: List[String] = ["r_regionkey"]
     var nation_region: List[String] = ["n_regionkey"]
-    var asia = tables.region.filter(
-        _cmp(tables.region, "r_name", BinaryOp.EQ, Value(String("ASIA")))
-    ).join_on(tables.nation, region_key^, nation_region^)
+    var nation_keep: List[String] = ["n_nationkey", "n_name"]
+    var asia = (
+        tables.region.filter(
+            _cmp(tables.region, "r_name", BinaryOp.EQ, Value(String("ASIA")))
+        )
+        .join_on(tables.nation, region_key^, nation_region^)
+        .select(nation_keep^)
+    )
     var customer_want: List[String] = ["c_custkey", "c_nationkey"]
     var buyers = tables.customer.select(customer_want^)
     var nation_id: List[String] = ["n_nationkey"]
     var cust_nation: List[String] = ["c_nationkey"]
-    var here = asia.join_on(buyers, nation_id^, cust_nation^)
+    var buyer_keep: List[String] = ["n_nationkey", "n_name", "c_custkey"]
+    var here = asia.join_on(buyers, nation_id^, cust_nation^).select(
+        buyer_keep^
+    )
     var year = _both(
         _cmp(tables.orders, "o_orderdate", BinaryOp.GE, day(1994, 1, 1)),
         _cmp(tables.orders, "o_orderdate", BinaryOp.LT, day(1995, 1, 1)),
@@ -947,7 +955,8 @@ def q5(ref tables: Tpch) raises -> DataFrame:
     var early = _keep(tables.orders, order_want, year)
     var custkey: List[String] = ["c_custkey"]
     var ordercust: List[String] = ["o_custkey"]
-    var placed = here.join_on(early, custkey^, ordercust^)
+    var order_keep: List[String] = ["n_nationkey", "n_name", "o_orderkey"]
+    var placed = here.join_on(early, custkey^, ordercust^).select(order_keep^)
     var line_want: List[String] = [
         "l_orderkey",
         "l_suppkey",
@@ -957,7 +966,18 @@ def q5(ref tables: Tpch) raises -> DataFrame:
     var sold = tables.lineitem.select(line_want^)
     var orderkey: List[String] = ["o_orderkey"]
     var lineorder: List[String] = ["l_orderkey"]
-    var lines = placed.join_on(sold, orderkey^, lineorder^)
+    # Six million lines against forty six thousand orders, so the projection
+    # goes on the join itself and the order keys are never gathered.
+    var line_keep: List[String] = [
+        "n_nationkey",
+        "n_name",
+        "l_suppkey",
+        "l_extendedprice",
+        "l_discount",
+    ]
+    var lines = placed.join_on(
+        sold, orderkey^, lineorder^, JoinKind.INNER, "_right", line_keep^
+    )
     var supplier_want: List[String] = ["s_suppkey", "s_nationkey"]
     var sellers = tables.supplier.select(supplier_want^)
     var left_pair: List[String] = ["l_suppkey", "n_nationkey"]
