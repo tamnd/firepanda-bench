@@ -12,6 +12,10 @@ This changes what a published firepanda TPC-H number means, so the next release 
 
 q5 joined the whole of region and nation into customers, so `r_name`, `r_comment`, `n_comment` and five other columns rode through the join against six million lines and were gathered for each of the 184 thousand rows that came out, and the only ones read after it are `n_nationkey`, `n_name` and the line columns. The other ports already select after a small join, as q7 and q8 do, and the pandas port reduces region to its key before merging. q5 now does the same, and the lineitem join takes the projection itself, so the order keys are not gathered either. Polars and DuckDB drop these columns in their planners, so this brings the port in line with what they run and does not give firepanda anything they lack. Old and new plans in one binary, run alternately fifteen times a session on a busy eight core Linux VM: best of fifteen went from 193 to 151 ms, 195 to 137 and 281 to 199 over three sessions, with the same five nations and revenues.
 
+### The firepanda q6 port ands its five comparisons in one pass
+
+q6 compared three lineitem columns against five constants, wrote a mask for each and anded the five masks with `conjoin`. It now hands all five to firepanda's `conjoin_compares`, which reads each column once and writes one mask. Polars fuses a conjunction the same way and DuckDB narrows a selection vector, so neither of them wrote those masks either. The answer is unchanged.
+
 ## v0.6.0
 
 A minor bump, and the rule at the top of this file is why. The ClickBench planner route stops charging firepanda for reading its grammar tables on every timed query, which takes one to one and a half milliseconds off each query through that route. It is a fixed amount a query, so it moves the fast half of the planner comparison and not the slow half, and a planner number written before this is not comparable with one written after it. The engine table is the hand written route and nothing in it moves. The driver needs firepanda 0.8.26 or later.
