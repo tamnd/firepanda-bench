@@ -67,7 +67,12 @@ from firepanda.kernel import (
     logical_or,
     reduce_any,
 )
-from firepanda.kernel.binary import BinaryOp, binary_any, binary_value_any
+from firepanda.kernel.binary import (
+    BinaryOp,
+    binary_any,
+    binary_value_any,
+    conjoin_compares,
+)
 from firepanda.kernel.pattern import text_contains
 from firepanda.kernel.temporal import TemporalField, temporal_field
 
@@ -1010,20 +1015,28 @@ def q6(ref tables: Tpch) raises -> DataFrame:
         As the operations it runs do.
     """
     ref lineitem = tables.lineitem
-    var masks = List[Array[DType.bool]](capacity=5)
-    masks.append(_cmp(lineitem, "l_shipdate", BinaryOp.GE, day(1994, 1, 1)))
-    masks.append(_cmp(lineitem, "l_shipdate", BinaryOp.LT, day(1995, 1, 1)))
-    masks.append(
-        _cmp(lineitem, "l_discount", BinaryOp.GE, Value(Float64(0.05)))
-    )
-    masks.append(
-        _cmp(lineitem, "l_discount", BinaryOp.LE, Value(Float64(0.07)))
-    )
-    masks.append(
-        _cmp(lineitem, "l_quantity", BinaryOp.LT, Value(Float64(24.0)))
+    var date = lineitem.schema.index_of("l_shipdate")
+    var discount = lineitem.schema.index_of("l_discount")
+    var quantity = lineitem.schema.index_of("l_quantity")
+    var mask = conjoin_compares(
+        [
+            lineitem[date].copy(),
+            lineitem[date].copy(),
+            lineitem[discount].copy(),
+            lineitem[discount].copy(),
+            lineitem[quantity].copy(),
+        ],
+        [BinaryOp.GE, BinaryOp.LT, BinaryOp.GE, BinaryOp.LE, BinaryOp.LT],
+        [
+            day(1994, 1, 1),
+            day(1995, 1, 1),
+            Value(Float64(0.05)),
+            Value(Float64(0.07)),
+            Value(Float64(24.0)),
+        ],
     )
     var want: List[String] = ["l_extendedprice", "l_discount"]
-    var kept = _keep(lineitem, want, _all(masks^))
+    var kept = _keep(lineitem, want, mask)
     var revenue = _product(kept, "l_extendedprice", "l_discount", "revenue")
     return _one("revenue", _reduced(revenue, AggKind.SUM))
 
