@@ -4,6 +4,10 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### The firepanda ports count a filter's mask once for all its columns
+
+`_keep`, the helper that filters a table down to the columns a query reads, filtered each column with `filter_any`, and each of those counted the whole mask again before copying. It now counts once with `filter_offsets` and passes the count to `filter_counted` for every column, which is what `DataFrame.filter` already does inside the library. The answers are unchanged: all fourteen queries that use the helper return the same rows before and after on a busy 8 core VM. The box was too loaded for a clean timing, but in its quieter round q10, which keeps three lineitem columns from six million rows, went from 268 to 196 milliseconds.
+
 ### The firepanda ports run their date ranges as one fused comparison
 
 q4, q5, q7, q8, q10, q14, q15 and q20 each filter a date column to a range, which was two comparisons and a third pass to and them. A `_between` helper now hands both to `conjoin_compares`, the one pass kernel q6 moved to, which is the conjunction fused the way Polars' optimizer and DuckDB's filter do it. On a busy 8 core VM all eight return the same rows before and after; the box was too loaded for whole query times to mean anything, and the kernel halved q6's five comparison stage when it landed.
