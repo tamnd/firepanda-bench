@@ -1899,21 +1899,26 @@ def q19(ref tables: Tpch) raises -> DataFrame:
         As the operations it runs do.
     """
     var modes: List[String] = ["AIR", "AIR REG"]
-    var narrow = List[Array[DType.bool]](capacity=4)
+    var narrow = List[Array[DType.bool]](capacity=2)
     narrow.append(_in(tables.lineitem, "l_shipmode", modes))
+    # The instruction and the quantity range are one conjunction of compares
+    # against constants, so they go to `conjoin_compares` together.
+    var instruct = tables.lineitem.schema.index_of("l_shipinstruct")
+    var quantity = tables.lineitem.schema.index_of("l_quantity")
     narrow.append(
-        _cmp(
-            tables.lineitem,
-            "l_shipinstruct",
-            BinaryOp.EQ,
-            Value(String("DELIVER IN PERSON")),
+        conjoin_compares(
+            [
+                tables.lineitem[instruct].copy(),
+                tables.lineitem[quantity].copy(),
+                tables.lineitem[quantity].copy(),
+            ],
+            [BinaryOp.EQ, BinaryOp.GE, BinaryOp.LE],
+            [
+                Value(String("DELIVER IN PERSON")),
+                Value(Float64(1.0)),
+                Value(Float64(30.0)),
+            ],
         )
-    )
-    narrow.append(
-        _cmp(tables.lineitem, "l_quantity", BinaryOp.GE, Value(Float64(1.0)))
-    )
-    narrow.append(
-        _cmp(tables.lineitem, "l_quantity", BinaryOp.LE, Value(Float64(30.0)))
     )
     var line_want: List[String] = [
         "l_partkey",
@@ -1938,11 +1943,19 @@ def q19(ref tables: Tpch) raises -> DataFrame:
         "LG PACK",
         "LG PKG",
     ]
-    var wanted = List[Array[DType.bool]](capacity=4)
+    var wanted = List[Array[DType.bool]](capacity=3)
     wanted.append(_in(tables.part, "p_brand", brands))
     wanted.append(_in(tables.part, "p_container", boxes))
-    wanted.append(_cmp(tables.part, "p_size", BinaryOp.GE, Value(Int32(1))))
-    wanted.append(_cmp(tables.part, "p_size", BinaryOp.LE, Value(Int32(15))))
+    wanted.append(
+        _between(
+            tables.part,
+            "p_size",
+            BinaryOp.GE,
+            Value(Int32(1)),
+            BinaryOp.LE,
+            Value(Int32(15)),
+        )
+    )
     var part_want: List[String] = [
         "p_partkey",
         "p_brand",
