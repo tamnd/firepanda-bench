@@ -61,7 +61,8 @@ from firepanda.io.parquet import Session
 from firepanda.join import JoinKind
 from firepanda.kernel import (
     conjoin,
-    filter_any,
+    filter_counted,
+    filter_offsets,
     is_in_any,
     logical_and,
     logical_or,
@@ -533,11 +534,16 @@ def _keep(
     Raises:
         If a name is missing, or as the filter does.
     """
+    # The mask is counted once and the count is shared by every column, which
+    # is what `DataFrame.filter` does for a frame of more than one column.
+    var offsets = List[Int]()
+    if len(names) > 1:
+        offsets = filter_offsets(mask)
     var fields = List[Field](capacity=len(names))
     var columns = List[AnyArray](capacity=len(names))
     for i in range(len(names)):
         var at = frame.schema.index_of(names[i])
-        columns.append(filter_any(frame[at], mask))
+        columns.append(filter_counted(frame[at], mask, Span(offsets)))
         fields.append(Field(names[i], columns[i].type))
     return DataFrame(Schema(fields^), columns^)
 
