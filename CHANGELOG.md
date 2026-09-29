@@ -4,6 +4,10 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### q16, q17 and q20 name their columns before they filter or join
+
+Three ports filtered a whole table and then selected one column from the result: part in q17 and q20, supplier in q16. Every text column of those tables was compacted on the way, and at SF10 part is two million rows. They now go through `_keep`, the projection pushdown the other ports already use. q17 also joined all sixteen lineitem columns onto the parts it wanted, and now selects the three it reads before the join. Polars and DuckDB both work these projections out from the query on their own. On a busy 8 core VM all three return the same rows, and q17 ran about three times faster in every interleaved round, 105 to 28 ms in the quietest.
+
 ### q19 runs its lineitem and part filters as fused comparisons
 
 The lineitem side of q19 asked for a ship instruction and a quantity range as three comparisons, three masks and a pass to and them. They now go to `conjoin_compares` together, which folds each into one mask as it goes, and the part side's size range goes through `_between` the way the date ranges do. Both are conjunctions against constants, which Polars' optimizer and DuckDB's filter fuse the same way. q19 returns the same answer before and after on a busy 8 core VM.

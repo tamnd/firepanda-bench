@@ -1703,11 +1703,13 @@ def q16(ref tables: Tpch) raises -> DataFrame:
         As the operations it runs do.
     """
     var keep: List[String] = ["s_suppkey"]
-    var complained = tables.supplier.filter(
+    var complained = _keep(
+        tables.supplier,
+        keep,
         tables.supplier.column("s_comment").str_contains_in_order(
             "Customer", "Complaints"
-        )
-    ).select(keep^)
+        ),
+    )
 
     var brands = _cmp(tables.part, "p_brand", BinaryOp.NE, Value(String("Brand#45")))
     var types = _not(
@@ -1778,11 +1780,14 @@ def q17(ref tables: Tpch) raises -> DataFrame:
     var brand = _cmp(tables.part, "p_brand", BinaryOp.EQ, Value(String("Brand#23")))
     var container = _cmp(tables.part, "p_container", BinaryOp.EQ, Value(String("MED BOX")))
     var keep: List[String] = ["p_partkey"]
-    var wanted = tables.part.filter(_both(brand, container)).select(keep^)
+    var wanted = _keep(tables.part, keep, _both(brand, container))
 
+    var line_want: List[String] = ["l_partkey", "l_quantity", "l_extendedprice"]
     var linepart: List[String] = ["l_partkey"]
     var partkey: List[String] = ["p_partkey"]
-    var lines = tables.lineitem.join_on(wanted, linepart^, partkey^)
+    var lines = tables.lineitem.select(line_want^).join_on(
+        wanted, linepart^, partkey^
+    )
     var by: List[String] = ["l_partkey"]
     var specs: List[AggSpec] = [
         AggSpec("l_quantity", AggKind.MEAN, "avg_qty")
@@ -2024,9 +2029,11 @@ def q20(ref tables: Tpch) raises -> DataFrame:
         As the operations it runs do.
     """
     var keep: List[String] = ["p_partkey"]
-    var forest = tables.part.filter(
-        tables.part.column("p_name").str_starts_with("forest")
-    ).select(keep^)
+    var forest = _keep(
+        tables.part,
+        keep,
+        tables.part.column("p_name").str_starts_with("forest"),
+    )
 
     var year = _between(
         tables.lineitem,
