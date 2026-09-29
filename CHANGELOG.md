@@ -4,6 +4,10 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### The firepanda ports run their date ranges as one fused comparison
+
+q4, q5, q7, q8, q10, q14, q15 and q20 each filter a date column to a range, which was two comparisons and a third pass to and them. A `_between` helper now hands both to `conjoin_compares`, the one pass kernel q6 moved to, which is the conjunction fused the way Polars' optimizer and DuckDB's filter do it. On a busy 8 core VM all eight return the same rows before and after; the box was too loaded for whole query times to mean anything, and the kernel halved q6's five comparison stage when it landed.
+
 ### firepanda reads TPC-H with its repeating string columns held as codes
 
 This changes what a published firepanda TPC-H number means, so the next release is a minor bump. The driver takes `--encode-strings=1` and passes `encode_strings=True` to firepanda's Parquet read, and the harness sets it unless `FIREPANDA_ENCODE_STRINGS=0`. A string column whose values repeat, like `l_shipmode` or `p_type`, comes back as int32 codes into its distinct values with the dtype still string. `run_tpch` decodes any column still encoded before it returns, inside the timed region, because every other engine hands back plain strings. On sf1 on a six core Linux machine all 22 answers match the flat read byte for byte, and the peak of each query with every table loaded went from 2.80 to 3.08 GB flat to 2.60 to 2.70 GB. The driver needs firepanda with #1043 in it.

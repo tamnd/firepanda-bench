@@ -451,6 +451,42 @@ def _contains(
     return text_contains(frame[at].strings(), needle.as_bytes())
 
 
+def _between(
+    frame: DataFrame,
+    name: String,
+    low_op: BinaryOp,
+    low: Value,
+    high_op: BinaryOp,
+    high: Value,
+) raises -> Array[DType.bool]:
+    """Keeps the rows of one column that fall inside a range, in one pass.
+
+    A range written as two `_cmp` calls and a `_both` is two masks and a third
+    to and them into. `conjoin_compares` folds both comparisons into one mask as
+    it goes, which is the conjunction fused the way a planner fuses it.
+
+    Args:
+        frame: The frame.
+        name: The column the range is on.
+        low_op: The comparison against the low end, `GE` or `GT`.
+        low: The low end.
+        high_op: The comparison against the high end, `LT` or `LE`.
+        high: The high end.
+
+    Returns:
+        The mask.
+
+    Raises:
+        If the column is missing, or as the comparisons do.
+    """
+    var at = frame.schema.index_of(name)
+    return conjoin_compares(
+        [frame[at].copy(), frame[at].copy()],
+        [low_op, high_op],
+        [low.copy(), high.copy()],
+    )
+
+
 def _cmp2(
     frame: DataFrame, left: String, right: String, op: BinaryOp
 ) raises -> Array[DType.bool]:
@@ -906,9 +942,13 @@ def q4(ref tables: Tpch) raises -> DataFrame:
         late_want,
         _cmp2(tables.lineitem, "l_commitdate", "l_receiptdate", BinaryOp.LT),
     )
-    var quarter = _both(
-        _cmp(tables.orders, "o_orderdate", BinaryOp.GE, day(1993, 7, 1)),
-        _cmp(tables.orders, "o_orderdate", BinaryOp.LT, day(1993, 10, 1)),
+    var quarter = _between(
+        tables.orders,
+        "o_orderdate",
+        BinaryOp.GE,
+        day(1993, 7, 1),
+        BinaryOp.LT,
+        day(1993, 10, 1),
     )
     var placed_want: List[String] = ["o_orderkey", "o_orderpriority"]
     var placed = _keep(tables.orders, placed_want, quarter)
@@ -952,9 +992,13 @@ def q5(ref tables: Tpch) raises -> DataFrame:
     var here = asia.join_on(buyers, nation_id^, cust_nation^).select(
         buyer_keep^
     )
-    var year = _both(
-        _cmp(tables.orders, "o_orderdate", BinaryOp.GE, day(1994, 1, 1)),
-        _cmp(tables.orders, "o_orderdate", BinaryOp.LT, day(1995, 1, 1)),
+    var year = _between(
+        tables.orders,
+        "o_orderdate",
+        BinaryOp.GE,
+        day(1994, 1, 1),
+        BinaryOp.LT,
+        day(1995, 1, 1),
     )
     var order_want: List[String] = ["o_orderkey", "o_custkey"]
     var early = _keep(tables.orders, order_want, year)
@@ -1095,9 +1139,13 @@ def q7(ref tables: Tpch) raises -> DataFrame:
     var buyer_keep: List[String] = ["c_custkey", "cust_nation"]
     buyers = buyers.select(buyer_keep^)
 
-    var window = _both(
-        _cmp(tables.lineitem, "l_shipdate", BinaryOp.GE, day(1995, 1, 1)),
-        _cmp(tables.lineitem, "l_shipdate", BinaryOp.LE, day(1996, 12, 31)),
+    var window = _between(
+        tables.lineitem,
+        "l_shipdate",
+        BinaryOp.GE,
+        day(1995, 1, 1),
+        BinaryOp.LE,
+        day(1996, 12, 31),
     )
     var line_want: List[String] = [
         "l_orderkey",
@@ -1185,9 +1233,13 @@ def q8(ref tables: Tpch) raises -> DataFrame:
     var lines = steel.join_on(sold, partkey^, linepart^)
     # The window reads only orders, so it runs on the base table rather than on
     # the join output that used to carry it.
-    var window = _both(
-        _cmp(tables.orders, "o_orderdate", BinaryOp.GE, day(1995, 1, 1)),
-        _cmp(tables.orders, "o_orderdate", BinaryOp.LE, day(1996, 12, 31)),
+    var window = _between(
+        tables.orders,
+        "o_orderdate",
+        BinaryOp.GE,
+        day(1995, 1, 1),
+        BinaryOp.LE,
+        day(1996, 12, 31),
     )
     var order_want: List[String] = ["o_orderkey", "o_custkey", "o_orderdate"]
     var within = _keep(tables.orders, order_want, window)
@@ -1316,9 +1368,13 @@ def q10(ref tables: Tpch) raises -> DataFrame:
     Raises:
         As the operations it runs do.
     """
-    var quarter = _both(
-        _cmp(tables.orders, "o_orderdate", BinaryOp.GE, day(1993, 10, 1)),
-        _cmp(tables.orders, "o_orderdate", BinaryOp.LT, day(1994, 1, 1)),
+    var quarter = _between(
+        tables.orders,
+        "o_orderdate",
+        BinaryOp.GE,
+        day(1993, 10, 1),
+        BinaryOp.LT,
+        day(1994, 1, 1),
     )
     var order_want: List[String] = ["o_orderkey", "o_custkey"]
     var early = _keep(tables.orders, order_want, quarter)
@@ -1541,9 +1597,13 @@ def q14(ref tables: Tpch) raises -> DataFrame:
     Raises:
         As the operations it runs do.
     """
-    var month = _both(
-        _cmp(tables.lineitem, "l_shipdate", BinaryOp.GE, day(1995, 9, 1)),
-        _cmp(tables.lineitem, "l_shipdate", BinaryOp.LT, day(1995, 10, 1)),
+    var month = _between(
+        tables.lineitem,
+        "l_shipdate",
+        BinaryOp.GE,
+        day(1995, 9, 1),
+        BinaryOp.LT,
+        day(1995, 10, 1),
     )
     var line_want: List[String] = [
         "l_partkey",
@@ -1577,9 +1637,13 @@ def q15(ref tables: Tpch) raises -> DataFrame:
     Raises:
         As the operations it runs do.
     """
-    var quarter = _both(
-        _cmp(tables.lineitem, "l_shipdate", BinaryOp.GE, day(1996, 1, 1)),
-        _cmp(tables.lineitem, "l_shipdate", BinaryOp.LT, day(1996, 4, 1)),
+    var quarter = _between(
+        tables.lineitem,
+        "l_shipdate",
+        BinaryOp.GE,
+        day(1996, 1, 1),
+        BinaryOp.LT,
+        day(1996, 4, 1),
     )
     var line_want: List[String] = [
         "l_suppkey",
@@ -1945,9 +2009,13 @@ def q20(ref tables: Tpch) raises -> DataFrame:
         tables.part.column("p_name").str_starts_with("forest")
     ).select(keep^)
 
-    var year = _both(
-        _cmp(tables.lineitem, "l_shipdate", BinaryOp.GE, day(1994, 1, 1)),
-        _cmp(tables.lineitem, "l_shipdate", BinaryOp.LT, day(1995, 1, 1)),
+    var year = _between(
+        tables.lineitem,
+        "l_shipdate",
+        BinaryOp.GE,
+        day(1994, 1, 1),
+        BinaryOp.LT,
+        day(1995, 1, 1),
     )
     var line_want: List[String] = ["l_partkey", "l_suppkey", "l_quantity"]
     var lines = _keep(tables.lineitem, line_want, year)
