@@ -1509,15 +1509,19 @@ def q12(ref tables: Tpch) raises -> DataFrame:
     # six million rows to keep about thirty thousand of them.
     ref lineitem = tables.lineitem
     var modes: List[String] = ["MAIL", "SHIP"]
-    var masks = List[Array[DType.bool]](capacity=6)
+    var masks = List[Array[DType.bool]](capacity=4)
     masks.append(_in(lineitem, "l_shipmode", modes))
     masks.append(_cmp2(lineitem, "l_commitdate", "l_receiptdate", BinaryOp.LT))
     masks.append(_cmp2(lineitem, "l_shipdate", "l_commitdate", BinaryOp.LT))
     masks.append(
-        _cmp(lineitem, "l_receiptdate", BinaryOp.GE, day(1994, 1, 1))
-    )
-    masks.append(
-        _cmp(lineitem, "l_receiptdate", BinaryOp.LT, day(1995, 1, 1))
+        _between(
+            lineitem,
+            "l_receiptdate",
+            BinaryOp.GE,
+            day(1994, 1, 1),
+            BinaryOp.LT,
+            day(1995, 1, 1),
+        )
     )
     var line_want: List[String] = ["l_orderkey", "l_shipmode"]
     var lines = _keep(lineitem, line_want, _all(masks^))
@@ -2211,11 +2215,15 @@ def q22(ref tables: Tpch) raises -> DataFrame:
         "cntrycode"
     )
     var wide = tables.customer.with_column(country^)
-    var selected = wide.filter(
-        wide.column("cntrycode").is_in(_texts(codes^))
+    var customer_want: List[String] = ["c_custkey", "c_acctbal", "cntrycode"]
+    var selected = _keep(
+        wide, customer_want, wide.column("cntrycode").is_in(_texts(codes^))
     )
-    var positive = selected.filter(
-        _cmp(selected, "c_acctbal", BinaryOp.GT, Value(Float64(0.0)))
+    var balance_want: List[String] = ["c_acctbal"]
+    var positive = _keep(
+        selected,
+        balance_want,
+        _cmp(selected, "c_acctbal", BinaryOp.GT, Value(Float64(0.0))),
     )
     var average = _reduced(positive.column("c_acctbal"), AggKind.MEAN)
     var rich = selected.filter(
