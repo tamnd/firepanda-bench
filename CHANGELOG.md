@@ -4,6 +4,10 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### q19 runs its lineitem and part filters as fused comparisons
+
+The lineitem side of q19 asked for a ship instruction and a quantity range as three comparisons, three masks and a pass to and them. They now go to `conjoin_compares` together, which folds each into one mask as it goes, and the part side's size range goes through `_between` the way the date ranges do. Both are conjunctions against constants, which Polars' optimizer and DuckDB's filter fuse the same way. q19 returns the same answer before and after on a busy 8 core VM.
+
 ### The firepanda ports count a filter's mask once for all its columns
 
 `_keep`, the helper that filters a table down to the columns a query reads, filtered each column with `filter_any`, and each of those counted the whole mask again before copying. It now counts once with `filter_offsets` and passes the count to `filter_counted` for every column, which is what `DataFrame.filter` already does inside the library. The answers are unchanged: all fourteen queries that use the helper return the same rows before and after on a busy 8 core VM. The box was too loaded for a clean timing, but in its quieter round q10, which keeps three lineitem columns from six million rows, went from 268 to 196 milliseconds.
