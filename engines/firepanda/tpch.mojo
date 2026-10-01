@@ -824,7 +824,12 @@ def q2(ref tables: Tpch) raises -> DataFrame:
     var stock = tables.partsupp.select(stock_want^)
     var supplier_id: List[String] = ["s_suppkey"]
     var partsupp_supplier: List[String] = ["ps_suppkey"]
-    europe = europe.join_on(stock, supplier_id^, partsupp_supplier^)
+    # Unordered, as the Polars port's joins are by default: the pairs come back
+    # in part supply order and the 160,000 part supply rows are gathered front
+    # to back rather than in supplier order.
+    europe = europe.join_on(
+        stock, supplier_id^, partsupp_supplier^, ordered=False
+    )
 
     var sized = _cmp(tables.part, "p_size", BinaryOp.EQ, Value(Int32(15)))
     var brass = tables.part.column("p_type").str_ends_with("BRASS")
@@ -1031,7 +1036,13 @@ def q5(ref tables: Tpch) raises -> DataFrame:
         "l_discount",
     ]
     var lines = placed.join_on(
-        sold, orderkey^, lineorder^, JoinKind.INNER, "_right", line_keep^
+        sold,
+        orderkey^,
+        lineorder^,
+        JoinKind.INNER,
+        "_right",
+        line_keep^,
+        ordered=False,
     )
     var supplier_want: List[String] = ["s_suppkey", "s_nationkey"]
     var sellers = tables.supplier.select(supplier_want^)
@@ -1236,7 +1247,7 @@ def q8(ref tables: Tpch) raises -> DataFrame:
     var sold = tables.lineitem.select(line_want^)
     var partkey: List[String] = ["p_partkey"]
     var linepart: List[String] = ["l_partkey"]
-    var lines = steel.join_on(sold, partkey^, linepart^)
+    var lines = steel.join_on(sold, partkey^, linepart^, ordered=False)
     # The window reads only orders, so it runs on the base table rather than on
     # the join output that used to carry it.
     var window = _between(
@@ -1321,7 +1332,7 @@ def q9(ref tables: Tpch) raises -> DataFrame:
     var sold = tables.lineitem.select(line_want^)
     var partkey: List[String] = ["p_partkey"]
     var linepart: List[String] = ["l_partkey"]
-    var lines = green.join_on(sold, partkey^, linepart^)
+    var lines = green.join_on(sold, partkey^, linepart^, ordered=False)
     var supplier_want: List[String] = ["s_suppkey", "s_nationkey"]
     var sellers = tables.supplier.select(supplier_want^)
     var suppkey: List[String] = ["l_suppkey"]
