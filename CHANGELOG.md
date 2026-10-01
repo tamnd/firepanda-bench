@@ -4,6 +4,10 @@ Versions here track the harness, not the engines it measures and not firepanda i
 
 ## Unreleased
 
+### q2, q5, q8 and q9 join without keeping the left order
+
+Each of these joins a short side against a much taller one: suppliers against part supplies in q2, orders against lineitem in q5, parts against lineitem in q8 and q9. firepanda builds on the short side either way, and by default puts the pairs back in left row order, as pandas does. The tall side's columns were then gathered in the short side's order, which is close to a cache miss a row. These four joins now pass `ordered=False`, which keeps the tall side's order. That is what the Polars port gets, since a Polars join does not keep order unless asked to, and every one of these queries groups or sorts afterwards. On a shared six core box, best of fifteen: q2 35.5 to 26.3 ms, q5 65.3 to 60.5, q8 49.2 to 45.5 and q9 251.5 to 202.9. Needs firepanda with `ordered` on `join_on`.
+
 ### q22 keeps three customer columns and q12 fuses its receipt date range
 
 q22 filtered the whole customer table, its text columns included, to the rows with a wanted country code, and then filtered that full width result twice more. It reads three columns, so the first filter now keeps `c_custkey`, `c_acctbal` and the country code and the average is taken over a filter that keeps only the balance. q12's receipt date range was two comparisons and a third pass to and them, and now goes through `_between` like the ranges #114 moved. On a busy 8 core VM both return the same rows, and the new port was faster in each of three interleaved rounds: q22 53, 171 and 133 ms before against 42, 40 and 102 after, q12 206, 305 and 222 against 194, 203 and 171.
